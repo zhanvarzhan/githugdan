@@ -1,0 +1,113 @@
+name: Auto Cleanup (6-Hour Expiry)
+
+on:
+  schedule:
+    - cron: '0 * * * *' # این اسکریپت هر ۱ ساعت یک‌بار به صورت خودکار اجرا می‌شود
+  workflow_dispatch: # به شما اجازه می‌دهد هر زمان خواستید دستی هم آن را اجرا کنید
+
+jobs:
+  cleanup-expired-files:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # دادن دسترسی به گیت‌هاب برای حذف ریلیزها و تگ‌ها
+      
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install Dependencies
+        run: |
+          pip install requests huggingface_hub
+
+      - name: Create Cleanup Script
+        run: |
+          cat << 'EOF' > cleanup.py
+          import os
+          import requests
+          from datetime import datetime, timezone
+          from huggingface_hub import HfApi
+
+          # دریافت متغیرهای امنیتی از محیط گیت‌هاب
+          gh_token = os.environ['GITHUB_TOKEN']
+          gh_repo = os.environ['GH_REPO']
+          hf_token = os.environ['HF_TOKEN']
+          hf_repo_id = os.environ['HF_REPO_ID']
+          hf_repo_type = os.environ['HF_REPO_TYPE']
+
+          headers = {
+              'Authorization': f'token {gh_token}',
+              'Accept': 'application/vnd.github.v3+json'
+          }
+
+          # ۱. دریافت لیست تمام ریلیزهای گیت‌هاب
+          url = f'https://api.github.com/repos/{gh_repo}/releases'
+          response = requests.get(url, headers=headers)
+          
+          if response.status_code != 200:
+              print(f'Error fetching releases: {response.text}')
+              exit(1)
+
+          releases = response.json()
+          now = datetime.now(timezone.utc)
+          hf_api = HfApi()
+
+          # بررسی تک‌تک ریلیزها
+          for release in releases:
+              created_at_str = release['created_at']
+              # تبدیل زمان ساخت ریلیز به فرمت قابل محاسبات پایتون
+              created_at = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
+              age_seconds = (now - created_at).total_seconds()
+              
+              # ۶ ساعت معادل ۲۱۶۰۰ ثانیه است
+              if age_seconds > 21600:
+                  print(f'⚠️ ریلیز "{release["name"]}" بیشتر از ۶ ساعت عمر دارد. فرآیند حذف آغاز شد...')
+                  
+                  # الف) حذف فایل‌های متناظر از هاگینگ فیس
+                  for asset in release.get('assets', []):
+                      file_name = asset['name']
+                      print(f'⏳ در حال حذف فایل {file_name} از هاگینگ‌فیس...')
+                      try:
+                          hf_api.delete_file(
+                              path_in_repo=file_name,
+                              repo_id=hf_repo_id,
+                              repo_type=hf_repo_type,
+                              token=hf_token
+                          )
+                          print(f'✅ فایل {file_name} با موفقیت از هاگینگ‌فیس پاک شد.')
+                      except Exception as e:
+                          print(f'❌ خطا در حذف فایل از هاگینگ‌فیس: {e}')
+
+                  # ب) حذف خود ریلیز از گیت‌هاب (فایل‌های پیوست آن هم خودکار پاک می‌شوند)
+                  release_id = release['id']
+                  del_rel_url = f'https://api.github.com/repos/{gh_repo}/releases/{release_id}'
+                  del_res = requests.delete(del_rel_url, headers=headers)
+                  if del_res.status_code == 204:
+                      print(f'✅ ریلیز گیت‌هاب با شناسه {release_id} پاک شد.')
+                  else:
+                      print(f'❌ خطا در حذف ریلیز گیت‌هاب: {del_res.text}')
+
+                  # ج) حذف تگ (Tag) متناظر با ریلیز در گیت‌هاب برای پاکسازی کامل تاریخچه
+                  tag_name = release['tag_name']
+                  del_tag_url = f'https://api.github.com/repos/{gh_repo}/git/refs/tags/{tag_name}'
+                  tag_res = requests.delete(del_tag_url, headers=headers)
+                  if tag_res.status_code == 204:
+                      print(f'✅ تگ گیت‌هاب با نام {tag_name} کاملاً پاک شد.')
+                  else:
+                      print(f'❌ خطا در حذف تگ گیت‌هاب: {tag_res.text}')
+              else:
+                  print(f'ℹ️ ریلیز "{release["name"]}" هنوز به سقف ۶ ساعت نرسیده است.')
+          EOF
+
+      - name: Execute Cleanup
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # توکن پیش‌فرض و امن خود گیت‌هاب
+          GH_REPO: ${{ github.repository }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }} # توکن هاگینگ فیس شما که باید در Secrets تعریف کنید
+          HF_REPO_ID: "YourUsername/YourRepoName" # 🔴 نام کاربری و مخزن هاگینگ‌فیس خود را اینجا بنویسید
+          HF_REPO_TYPE: "model" # اگر مخزن شما دیتاست است به "dataset" تغییر دهید
+        run: python cleanup.py
