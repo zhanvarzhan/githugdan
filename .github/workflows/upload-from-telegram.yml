@@ -18,6 +18,13 @@ jobs:
     permissions:
       contents: write
       
+    # 🌟 متغیرهای عمومی به این بخش منتقل شدند تا در تمام گام‌ها (از جمله آپلود) قابل خواندن باشند
+    env:
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: "v1.0.0"
+      HF_REPO_ID: "mrk7197/my-storage"
+      HF_REPO_TYPE: "model"
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -33,13 +40,8 @@ jobs:
           TG_API_ID: ${{ secrets.TG_API_ID }}
           TG_API_HASH: ${{ secrets.TG_API_HASH }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BALE_BOT_TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
           BALE_CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
-          GH_REPO: ${{ github.repository }}
-          HF_REPO_ID: "mrk7197/my-storage"
-          HF_REPO_TYPE: "model"
-          RELEASE_TAG: "v1.0.0"
           CHAT_ID: ${{ github.event.inputs.chat_id }}
           MESSAGE_ID: ${{ github.event.inputs.message_id }}
         run: |
@@ -183,13 +185,13 @@ jobs:
         run: |
           FILE_PATH=$(cat file_info.txt)
           if [ -f "$FILE_PATH" ]; then
-            # بررسی اینکه آیا تگ ریلیز از قبل وجود دارد یا خیر
+            # اکنون مقادیر RELEASE_TAG در این گام به درستی خوانده می‌شوند
             if ! gh release view "${{ env.RELEASE_TAG }}" --repo "${{ env.GH_REPO }}" >/dev/null 2>&1; then
               echo "Creating new release..."
               gh release create "${{ env.RELEASE_TAG }}" --repo "${{ env.GH_REPO }}" --title "Release ${{ env.RELEASE_TAG }}" --notes "Automated Cloud Storage Assets"
             fi
             
-            # آپلود قطعی فایل با آرگومان تگ در انتها (فرمت استاندارد غیرتعاملی)
+            # آپلود قطعی فایل با مشخص شدن دقیق نام تگ
             gh release upload "${{ env.RELEASE_TAG }}" "$FILE_PATH" --repo "${{ env.GH_REPO }}" --clobber
             echo "GH_STATUS=✅ موفق" >> $GITHUB_ENV
           else
