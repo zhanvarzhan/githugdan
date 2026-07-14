@@ -74,6 +74,9 @@ jobs:
               if file_size <= chunk_size:
                   return [file_path]
                   
+              # استخراج نام فایل و پسوند برای حفظ فرمت فایل در پارت‌ها
+              base_name, ext = os.path.splitext(file_path)
+              
               chunks = []
               with open(file_path, 'rb') as f:
                   chunk_num = 1
@@ -81,7 +84,8 @@ jobs:
                       data = f.read(chunk_size)
                       if not data:
                           break
-                      chunk_name = f"{file_path}.part{chunk_num:03d}"
+                      # نام‌گذاری اصلاح شده: v0.9.25.part001.apk به جای v0.9.25.apk.part001
+                      chunk_name = f"{base_name}.part{chunk_num:03d}{ext}"
                       with open(chunk_name, 'wb') as chunk_file:
                           chunk_file.write(data)
                       chunks.append(chunk_name)
@@ -93,15 +97,22 @@ jobs:
                   return False
               url = f"https://tapi.bale.ai/bot{BALE_TOKEN}/sendDocument"
               try:
+                  # ارسال نام فایل تمیز در هدر ریکوئست
+                  file_name = os.path.basename(file_path)
                   with open(file_path, 'rb') as f:
-                      res = requests.post(url, data={'chat_id': BALE_CHAT, 'caption': caption}, files={'document': f}, timeout=60)
+                      res = requests.post(
+                          url, 
+                          data={'chat_id': BALE_CHAT, 'caption': caption}, 
+                          files={'document': (file_name, f)}, 
+                          timeout=120
+                      )
+                  print(f"Bale Response for {file_name}: {res.status_code} - {res.text}")
                   return res.status_code == 200
               except Exception as e:
                   print(f"Bale Error: {e}")
                   return False
           
           def read_in_chunks(file_path, chunk_size=1024*1024):
-              """خواندن فایل به صورت تکه‌تکه برای جلوگیری از خطای SSL در گیت‌هاب"""
               with open(file_path, 'rb') as f:
                   while True:
                       data = f.read(chunk_size)
@@ -142,7 +153,7 @@ jobs:
               except Exception as e:
                   hf_status = f"❌ خطا ({str(e)})"
           
-              # 2. آپلود گیت‌هاب ریلیز (با متد استریمینگ پایدار)
+              # 2. آپلود گیت‌هاب ریلیز
               gh_status = "✅ موفق"
               gh_token = os.environ['GITHUB_TOKEN']
               gh_repo = os.environ['GH_REPO']
@@ -160,19 +171,17 @@ jobs:
                   upload_url = f"https://uploads.github.com/repos/{gh_repo}/releases/{rel_id}/assets?name={file_name}"
                   headers['Content-Type'] = 'application/octet-stream'
                   
-                  # تلاش تا ۳ بار در صورت قطع لایه SSL
                   for attempt in range(3):
                       try:
                           response = requests.post(upload_url, headers=headers, data=read_in_chunks(file_path), timeout=300)
                           if response.status_code in [201, 200]:
                               break
-                          elif response.status_code == 422: # فایل از قبل وجود دارد
+                          elif response.status_code == 422:
                               gh_status = "✅ موفق (از قبل موجود بود)"
                               break
                       except Exception as e:
                           if attempt == 2:
                               gh_status = f"❌ خطا در آپلود ریلیز ({str(e)})"
-                              print(f"GitHub Upload Error: {e}")
               else:
                   gh_status = "❌ خطا در ساخت ریلیز"
                   
