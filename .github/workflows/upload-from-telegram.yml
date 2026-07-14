@@ -72,7 +72,7 @@ jobs:
                       return obj.file_id, file_name, obj.file_size
               return None, None, None
               
-          def split_file_for_bale(file_path, chunk_mb=45):
+          def split_file_for_bale(file_path, chunk_mb=10):
               chunk_size = chunk_mb * 1024 * 1024
               file_size = os.path.getsize(file_path)
               if file_size <= chunk_size:
@@ -85,7 +85,7 @@ jobs:
                       data = f.read(chunk_size)
                       if not data:
                           break
-                      # 🌟 تغییر فرمت نام‌گذاری برای عبور از آنتی‌ویروس بله (پسوند فایل دیگر .apk نخواهد بود)
+                      # نام‌گذاری امن بدون داشتن پسوند خطرناک در انتهای نام فایل
                       chunk_name = f"{file_path}.part{chunk_num:03d}"
                       with open(chunk_name, 'wb') as chunk_file:
                           chunk_file.write(data)
@@ -149,10 +149,10 @@ jobs:
               with open("file_info.txt", "w") as fi:
                   fi.write(file_path)
 
-              # 2. پردازش و آپلود به بله (تنظیم شده روی پارت‌های امن 45 مگابایتی)
+              # 2. پردازش و آپلود به بله (تنظیم مجدد روی 10 مگابایت به دلیل محدودیت وب‌سرور بله)
               bale_status = "⏳ در حال انجام..."
               if BALE_TOKEN and BALE_CHAT:
-                  chunks = split_file_for_bale(file_path, chunk_mb=45)
+                  chunks = split_file_for_bale(file_path, chunk_mb=10)
                   total_chunks = len(chunks)
                   success_count = 0
                   
