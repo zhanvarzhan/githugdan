@@ -102,19 +102,9 @@ jobs:
                           files={'document': (file_name, f)}, 
                           timeout=120
                       )
-                  print(f"Bale Response for {file_name}: {res.status_code} - {res.text}")
                   return res.status_code == 200
               except Exception as e:
-                  print(f"Bale Error: {e}")
                   return False
-          
-          def read_in_chunks(file_path, chunk_size=1024*1024):
-              with open(file_path, 'rb') as f:
-                  while True:
-                      data = f.read(chunk_size)
-                      if not data:
-                          break
-                      yield data
 
           async def main():
               app = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
@@ -129,7 +119,6 @@ jobs:
                   return
 
               file_size_mb = file_size / (1024 * 1024)
-              
               requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", 
                             json={"chat_id": CHAT_ID, "text": f"📥 دانلود فایل «{file_name}» ({file_size_mb:.2f} MB) آغاز شد..."})
 
@@ -148,40 +137,12 @@ jobs:
                   )
               except Exception as e:
                   hf_status = f"❌ خطا ({str(e)})"
-          
-              # 2. آپلود گیت‌هاب ریلیز
-              gh_status = "✅ موفق"
-              gh_token = os.environ['GITHUB_TOKEN']
-              gh_repo = os.environ['GH_REPO']
-              rel_tag = os.environ['RELEASE_TAG']
-              headers = {'Authorization': f'token {gh_token}', 'Accept': 'application/vnd.github.v3+json'}
               
-              res = requests.post(f"https://api.github.com/repos/{gh_repo}/releases", json={"tag_name": rel_tag, "name": f"Release {rel_tag}"}, headers=headers)
-              if res.status_code == 201:
-                  rel_id = res.json()['id']
-              else:
-                  res_get = requests.get(f"https://api.github.com/repos/{gh_repo}/releases/tags/{rel_tag}", headers=headers)
-                  rel_id = res_get.json().get('id')
-              
-              if rel_id:
-                  upload_url = f"https://uploads.github.com/repos/{gh_repo}/releases/{rel_id}/assets?name={file_name}"
-                  headers['Content-Type'] = 'application/octet-stream'
-                  
-                  for attempt in range(3):
-                      try:
-                          response = requests.post(upload_url, headers=headers, data=read_in_chunks(file_path), timeout=300)
-                          if response.status_code in [201, 200]:
-                              break
-                          elif response.status_code == 422:
-                              gh_status = "✅ موفق (از قبل موجود بود)"
-                              break
-                      except Exception as e:
-                          if attempt == 2:
-                              gh_status = f"❌ خطا ({str(e)})"
-              else:
-                  gh_status = "❌ خطا در ساخت ریلیز"
-                  
-              # 3. پردازش و آپلود به بله
+              # ایجاد یک فایل متنی کمکی برای ثبت نام فایل دانلود شده جهت استفاده در گام بعدی گیت‌هاب
+              with open("file_info.txt", "w") as fi:
+                  fi.write(file_path)
+
+              # 2. پردازش و آپلود به بله
               bale_status = "⏳ در حال انجام..."
               if BALE_TOKEN and BALE_CHAT:
                   chunks = split_file_for_bale(file_path, chunk_mb=10)
@@ -203,18 +164,11 @@ jobs:
               else:
                   bale_status = "❌ تنظیم نشده"
 
-              await app.stop()
-              if os.path.exists(file_path):
-                  os.remove(file_path)
+              # ذخیره وضعیت بله و هاگینگ فیس برای گام نهایی
+              with open("report_info.txt", "w") as ri:
+                  ri.write(f"🤗 هاگینگ‌فیس: {hf_status}\n🟢 پیام‌رسان بله: {bale_status}")
 
-              report = (
-                  f"🏁 فرآیند انتقال به تمام مقاصد انجام شد!\n\n"
-                  f"📦 نام فایل: {file_name}\n"
-                  f"🤗 هاگینگ‌فیس: {hf_status}\n"
-                  f"🐙 گیت‌هاب: {gh_status}\n"
-                  f"🟢 پیام‌رسان بله: {bale_status}"
-              )
-              requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": report})
+              await app.stop()
           
           if __name__ == '__main__':
               loop = asyncio.get_event_loop()
@@ -222,3 +176,36 @@ jobs:
           EOF
           
           python3 transfer.py
+
+      - name: Upload to GitHub Release (Native & Bulletproof)
+        id: gh_release
+        run: |
+          FILE_PATH=$(cat file_info.txt)
+          if [ -f "$FILE_PATH" ]; then
+            # ساخت یا واکشی ریلیز با ابزار رسمی گیت‌هاب
+            gh release create "${{ env.RELEASE_TAG }}" --repo "${{ env.GH_REPO }}" --title "Release ${{ env.RELEASE_TAG }}" --notes "Automated Cloud Storage" || true
+            # آپلود فایل با متد بومی لینوکس بدون خطای SSL
+            gh release upload "${{ env.RELEASE_TAG }}" "$FILE_PATH" --repo "${{ env.GH_REPO }}" --clobber
+            echo "GH_STATUS=✅ موفق" >> $GITHUB_ENV
+          else
+            echo "GH_STATUS=❌ خطا در یافتن فایل دانلود شده" >> $GITHUB_ENV
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Send Final Telegram Report
+        run: |
+          FILE_PATH=$(cat file_info.txt)
+          FILE_NAME=$(basename "$FILE_PATH")
+          OTHER_REPORTS=$(cat report_info.txt)
+          
+          REPORT_TEXT="🏁 فرآیند انتقال به تمام مقاصد انجام شد!
+
+          📦 نام فایل: $FILE_NAME
+          $OTHER_REPORTS
+          🐙 گیت‌هاب: ${{ env.GH_STATUS }}"
+          
+          # ارسال گزارش به تلگرام
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ github.event.inputs.chat_id }}" \
+            -d "text=$REPORT_TEXT"
