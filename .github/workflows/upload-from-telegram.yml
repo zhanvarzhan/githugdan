@@ -1,4 +1,58 @@
-name: Upload File (Telegram to GitHub & HF)
+name: Upload File (Telegram to GitHub, HF & Bale)
+
+on:
+  workflow_dispatch:
+    inputs:
+      chat_id:
+        description: 'Telegram Chat ID'
+        required: true
+      message_id:
+        description: 'Telegram Message ID'
+        required: true
+
+jobs:
+  download-and-upload:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      
+    steps:
+      - nameبسیار عالی! اکنون که توکن ربات بله را در اختیار دارید، همه‌چیز برای ساخت این پل ارتباطی قدرتمند آماده است.
+
+در این نسخه، ما یک سیستم هوشمند به کدها اضافه می‌کنیم که پس از تهیه نسخه پشتیبان در گیت‌هاب و هاگینگ‌فیس، فایل اصلی را به قطعات **۴۹ مگابایتی** (برای رعایت محدودیت‌های آپلود بله) تقسیم کرده و به ترتیب در گروه یا کانال شما در پیام‌رسان بله آپلود می‌کند.
+
+### پیش‌نیاز مهم پیش از جایگذاری کد
+ابتدا باید دو متغیر جدید را به بخش **Secrets and variables > Actions** در تنظیمات گیت‌هاب خود اضافه کنید:
+1. **`BALE_BOT_TOKEN`**: توکنی که از بات‌فادر بله دریافت کرده‌اید.
+2. **`BALE_CHAT_ID`**: شناسه عددی (Chat ID) گروه یا کانالی در بله که می‌خواهید فایل‌ها آنجا آپلود شوند (دقت کنید که ربات بله باید در آن گروه/کانال ادمین باشد).
+
+---
+
+### کدهای نهایی گیت‌هاب اکشنز (`upload-from-telegram.yml`)
+
+کدهای زیر را به طور کامل جایگزین محتوای قبلی فایل ورک‌فلوی خود در گیت‌هاب کنید:بسیار عالی. اضافه شدن این پل ارتباطی، پایداری و سرعت دسترسی تیم شما را به حداکثر می‌رساند. 
+
+برای پیاده‌سازی این سیستم، ما کدها را طوری ارتقا داده‌ایم که فایل‌ها در سرور گیت‌هاب، به صورت خودکار به قطعات **۴۵ مگابایتی** (کمی کمتر از ۵۰ مگابایت برای اطمینان کامل از رد نشدن از محدودیت‌های آپلود بله) تبدیل شده و با کپشنِ شماره‌گذاری شده به بله ارسال شوند.
+
+لطفاً این دو مرحله را به دقت انجام دهید:
+
+### مرحله اول: تعریف متغیرهای بله در گیت‌هاب (Secrets)
+برای اینکه گیت‌هاب بتواند به ربات بله متصل شود و فایل‌ها را به گروه/کانال یا پی‌وی شما در بله بفرستد، باید توکن ربات بله و آیدی چت مقصد را به بخش Secrets اضافه کنید:
+1. در مخزن گیت‌هاب خود به مسیر **Settings** > **Secrets and variables** > **Actions** بروید.
+2. روی **New repository secret** کلیک کنید و متغیر اول را بسازید:
+   * **Name:** `BALE_BOT_TOKEN`
+   * **Secret:** (توکنی که از بات‌فادر بله گرفته‌اید را اینجا قرار دهید)
+3. دوباره روی **New repository secret** کلیک کنید و متغیر دوم را بسازید:
+   * **Name:** `BALE_CHAT_ID`
+   * **Secret:** (شناسه عددی گروه، کانال یا پی‌وی خود در بله که می‌خواهید فایل‌ها آنجا ارسال شوند. اگر به پی‌وی ربات می‌فرستید، آیدی عددی خودتان در بله را وارد کنید).
+
+---
+
+### مرحله دوم: جایگزینی کدهای گیت‌هاب
+کدهای فایل `upload-from-telegram.yml` را به صورت کامل با نسخه جدید زیر جایگزین و ذخیره (Commit) کنید. در این نسخه، تابع تکه‌تکه کردن فایل‌ها (Chunking) و اتصال به API بله تعبیه شده است:
+
+```yaml
+name: Upload File (Telegram to GitHub, HF & Bale)
 
 on:
   workflow_dispatch:
@@ -34,6 +88,8 @@ jobs:
           TG_API_HASH: ${{ secrets.TG_API_HASH }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BALE_BOT_TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
+          BALE_CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
           GH_REPO: ${{ github.repository }}
           HF_REPO_ID: "mrk7197/my-storage"
           HF_REPO_TYPE: "model"
@@ -51,11 +107,13 @@ jobs:
           nest_asyncio.apply()
           from pyrogram import Client
           
-          BOT_TOKEN = os.environ['TG_BOT_TOKEN']
-          API_ID = int(os.environ['TG_API_ID'])
-          API_HASH = os.environ['TG_API_HASH']
-          CHAT_ID = int(os.environ['CHAT_ID'])
-          MESSAGE_ID = int(os.environ['MESSAGE_ID'])
+          BOT_TOKEN = os.environ.get('TG_BOT_TOKEN')
+          API_ID = int(os.environ.get('TG_API_ID', 0))
+          API_HASH = os.environ.get('TG_API_HASH')
+          CHAT_ID = int(os.environ.get('CHAT_ID', 0))
+          MESSAGE_ID = int(os.environ.get('MESSAGE_ID', 0))
+          BALE_TOKEN = os.environ.get('BALE_BOT_TOKEN')
+          BALE_CHAT = os.environ.get('BALE_CHAT_ID')
           
           def extract_file_details(msg):
               for attr in ["document", "video", "audio", "voice", "video_note", "animation", "photo"]:
@@ -66,12 +124,45 @@ jobs:
                       file_name = getattr(obj, "file_name", f"file_{obj.file_id[:8]}.{attr if attr != 'video' else 'mp4'}")
                       return obj.file_id, file_name, obj.file_size
               return None, None, None
+              
+          def split_file_for_bale(file_path, chunk_mb=45):
+              """تکه‌تکه کردن فایل‌های بزرگ به پارت‌های 45 مگابایتی"""
+              chunk_size = chunk_mb * 1024 * 1024
+              file_size = os.path.getsize(file_path)
+              if file_size <= chunk_size:
+                  return [file_path]
+                  
+              chunks = []
+              with open(file_path, 'rb') as f:
+                  chunk_num = 1
+                  while True:
+                      data = f.read(chunk_size)
+                      if not data:
+                          break
+                      chunk_name = f"{file_path}.part{chunk_num:03d}"
+                      with open(chunk_name, 'wb') as chunk_file:
+                          chunk_file.write(data)
+                      chunks.append(chunk_name)
+                      chunk_num += 1
+              return chunks
+
+          def upload_to_bale(file_path, caption):
+              """آپلود فایل در پیام‌رسان بله"""
+              if not BALE_TOKEN or not BALE_CHAT:
+                  return False
+              url = f"[https://tapi.bale.ai/bot](https://tapi.bale.ai/bot){BALE_TOKEN}/sendDocument"
+              try:
+                  with open(file_path, 'rb') as f:
+                      res = requests.post(url, data={'chat_id': BALE_CHAT, 'caption': caption}, files={'document': f})
+                  return res.status_code == 200
+              except Exception as e:
+                  print(f"Bale Error: {e}")
+                  return False
           
           async def main():
               app = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
               await app.start()
               
-              # خواندن مستقیم همان پیامی که فوروارد کرده‌اید
               msg = await app.get_messages(CHAT_ID, MESSAGE_ID)
               file_id, file_name, file_size = extract_file_details(msg)
               
@@ -82,12 +173,12 @@ jobs:
 
               file_size_mb = file_size / (1024 * 1024)
               
-              requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", 
-                            json={"chat_id": CHAT_ID, "text": f"📥 دانلود مستقیم فایل «{file_name}» ({file_size_mb:.2f} MB) از سرور تلگرام آغاز شد..."})
+              requests.post(f"[https://api.telegram.org/bot](https://api.telegram.org/bot){BOT_TOKEN}/sendMessage", 
+                            json={"chat_id": CHAT_ID, "text": f"📥 دانلود فایل «{file_name}» ({file_size_mb:.2f} MB) از تلگرام آغاز شد..."})
 
               file_path = await app.download_media(msg)
               
-              # آپلود هاگینگ فیس
+              # 1. آپلود هاگینگ فیس
               hf_status = "✅ موفق"
               try:
                   hf_api = HfApi()
@@ -101,41 +192,68 @@ jobs:
               except Exception as e:
                   hf_status = f"❌ خطا ({str(e)})"
           
-              # آپلود گیت‌هاب ریلیز
+              # 2. آپلود گیت‌هاب ریلیز
               gh_status = "✅ موفق"
               gh_token = os.environ['GITHUB_TOKEN']
               gh_repo = os.environ['GH_REPO']
               rel_tag = os.environ['RELEASE_TAG']
               headers = {'Authorization': f'token {gh_token}', 'Accept': 'application/vnd.github.v3+json'}
               
-              res = requests.post(f"https://api.github.com/repos/{gh_repo}/releases", json={"tag_name": rel_tag, "name": f"Release {rel_tag}"}, headers=headers)
+              res = requests.post(f"[https://api.github.com/repos/](https://api.github.com/repos/){gh_repo}/releases", json={"tag_name": rel_tag, "name": f"Release {rel_tag}"}, headers=headers)
               if res.status_code == 201:
                   rel_id = res.json()['id']
               else:
-                  res_get = requests.get(f"https://api.github.com/repos/{gh_repo}/releases/tags/{rel_tag}", headers=headers)
+                  res_get = requests.get(f"[https://api.github.com/repos/](https://api.github.com/repos/){gh_repo}/releases/tags/{rel_tag}", headers=headers)
                   rel_id = res_get.json().get('id')
               
               if rel_id:
-                  upload_url = f"https://uploads.github.com/repos/{gh_repo}/releases/{rel_id}/assets?name={file_name}"
+                  upload_url = f"[https://uploads.github.com/repos/](https://uploads.github.com/repos/){gh_repo}/releases/{rel_id}/assets?name={file_name}"
                   headers['Content-Type'] = 'application/octet-stream'
                   with open(file_path, 'rb') as f:
                       requests.post(upload_url, headers=headers, data=f)
               else:
                   gh_status = "❌ خطا در ساخت ریلیز"
                   
+              # 3. پردازش و آپلود به بله (تکه‌تکه کردن در صورت نیاز)
+              bale_status = "⏳ در حال انجام..."
+              if BALE_TOKEN and BALE_CHAT:
+                  requests.post(f"[https://api.telegram.org/bot](https://api.telegram.org/bot){BOT_TOKEN}/sendMessage", 
+                            json={"chat_id": CHAT_ID, "text": f"✂️ در حال آماده‌سازی و ارسال به پیام‌رسان بله..."})
+                  
+                  chunks = split_file_for_bale(file_path, chunk_mb=45)
+                  total_chunks = len(chunks)
+                  success_count = 0
+                  
+                  for i, chunk in enumerate(chunks, 1):
+                      caption = f"📦 {file_name}\nپارت {i} از {total_chunks}" if total_chunks > 1 else f"📦 {file_name}"
+                      if upload_to_bale(chunk, caption):
+                          success_count += 1
+                      
+                      # پاک کردن هر پارت پس از آپلود موفق برای جلوگیری از پر شدن هارد سرور گیت‌هاب
+                      if chunk != file_path and os.path.exists(chunk):
+                          os.remove(chunk)
+                  
+                  if success_count == total_chunks:
+                      bale_status = f"✅ موفق ({total_chunks} پارت)"
+                  else:
+                      bale_status = f"⚠️ ناقص ({success_count} از {total_chunks} پارت)"
+              else:
+                  bale_status = "❌ تنظیم نشده (توکن یا چت‌آیدی در گیت‌هاب وارد نشده است)"
+
               await app.stop()
               if os.path.exists(file_path):
                   os.remove(file_path)
 
-              # گزارش نهایی
+              # 4. گزارش نهایی به تلگرام
               report = (
-                  f"🏁 فرآیند انتقال با موفقیت انجام شد!\n\n"
+                  f"🏁 فرآیند انتقال به تمام مقاصد انجام شد!\n\n"
                   f"📦 نام فایل: {file_name}\n"
                   f"📊 حجم: {file_size_mb:.2f} MB\n"
                   f"🤗 هاگینگ‌فیس: {hf_status}\n"
-                  f"🐙 گیت‌هاب ریلیز: {gh_status}"
+                  f"🐙 گیت‌هاب: {gh_status}\n"
+                  f"🟢 پیام‌رسان بله: {bale_status}"
               )
-              requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": report})
+              requests.post(f"[https://api.telegram.org/bot](https://api.telegram.org/bot){BOT_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": report})
           
           if __name__ == '__main__':
               loop = asyncio.get_event_loop()
