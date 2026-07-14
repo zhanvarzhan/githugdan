@@ -1,24 +1,24 @@
 name: Upload File (Telegram to GitHub & HF)
 
 on:
-  workflow_dispatch: # فعال‌سازی دستی با دکمه Run workflow
+  workflow_dispatch:
 
 jobs:
   download-and-upload:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # مجوز لازم برای ساخت Release و آپلود فایل در گیت‌هاب
+      contents: write
       
     steps:
-      - name: Set up Python 3.10
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11' # استفاده از یک نسخه پایدار
 
       - name: Install Libraries
         run: |
           python -m pip install --upgrade pip
-          pip install pyrogram tgcrypto huggingface_hub requests
+          pip install pyrogram tgcrypto huggingface_hub requests nest_asyncio
 
       - name: Run Transfer Engine
         env:
@@ -28,7 +28,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          HF_REPO_ID: "mrk7197/my-storage" # 🟢 نام کاربری شما اصلاح شد. اگر نام مخزن هاگینگ‌فیس را چیزی غیر از my-storage گذاشته‌اید، آن را تغییر دهید.
+          HF_REPO_ID: "mrk7197/my-storage" # 🟢 اگر نام مخزن هاگینگ‌فیس شما چیزی غیر از my-storage است، آن را اینجا اصلاح کنید
           HF_REPO_TYPE: "model"
           RELEASE_TAG: "v1.0.0"
         run: |
@@ -36,8 +36,20 @@ jobs:
           import os
           import asyncio
           import requests
-          from pyrogram import Client
+          import nest_asyncio
           from huggingface_hub import HfApi
+
+          # حل مشکل قفل شدن ناگهانی حلقه‌های آسینک در پایتون‌های جدید
+          nest_asyncio.apply()
+          
+          # دور زدن ارور سیستم داخلی پایروگرام در زمان ایمپورت
+          try:
+              import uvloop
+              asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+          except ImportError:
+              pass
+              
+          from pyrogram import Client
           
           BOT_TOKEN = os.environ['TG_BOT_TOKEN']
           API_ID = int(os.environ['TG_API_ID'])
@@ -45,14 +57,16 @@ jobs:
           
           def get_latest_document_info():
               url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
-              res = requests.get(url).json()
-              if not res.get("ok") or not res.get("result"):
-                  return None, None
-              
-              for update in reversed(res["result"]):
-                  msg = update.get("message", {})
-                  if "document" in msg:
-                      return msg["chat"]["id"], msg["message_id"]
+              try:
+                  res = requests.get(url).json()
+                  if not res.get("ok") or not res.get("result"):
+                      return None, None
+                  for update in reversed(res["result"]):
+                      msg = update.get("message", {})
+                      if "document" in msg:
+                          return msg["chat"]["id"], msg["message_id"]
+              except Exception:
+                  pass
               return None, None
           
           async def main():
@@ -98,24 +112,35 @@ jobs:
               res = requests.post(f"https://api.github.com/repos/{gh_repo}/releases", json=rel_data, headers=headers)
               if res.status_code == 201:
                   rel_id = res.json()['id']
-              elif res.status_code == 422: 
-                  res_get = requests.get(f"https://api.github.com/repos/{gh_repo}/releases/tags/{rel_tag}", headers=headers)
-                  rel_id = res_get.json()['id']
-              
-              upload_url = f"https://uploads.github.com/repos/{gh_repo}/releases/{rel_id}/assets?name={file_name}"
-              headers['Content-Type'] = 'application/octet-stream'
-              with open(file_path, 'rb') as f:
-                  up_res = requests.post(upload_url, headers=headers, data=f)
-                  
-              if up_res.status_code == 201:
-                  print("✅ آپلود در گیت‌هاب موفق بود.")
               else:
-                  print(f"❌ خطا در گیت‌هاب: {up_res.text}")
+                  res_get = requests.get(f"https://api.github.com/repos/{gh_repo}/releases/tags/{rel_tag}", headers=headers)
+                  rel_id = res_get.json().get('id')
+              
+              if rel_id:
+                  upload_url = f"https://uploads.github.com/repos/{gh_repo}/releases/{rel_id}/assets?name={file_name}"
+                  headers['Content-Type'] = 'application/octet-stream'
+                  with open(file_path, 'rb') as f:
+                      up_res = requests.post(upload_url, headers=headers, data=f)
+                      
+                  if up_res.status_code == 201:
+                      print("✅ آپلود در گیت‌هاب موفق بود.")
+                  else:
+                      print(f"❌ خطا در آپلود گیت‌هاب: {up_res.text}")
+              else:
+                  print("❌ خطا در پیدا کردن یا ساخت ریلیز گیت‌هاب")
                   
               await app.stop()
-              os.remove(file_path)
+              if os.path.exists(file_path):
+                  os.remove(file_path)
           
-          asyncio.run(main())
+          # راه اندازی ایمن تر لوپ با متد جدید نیتیو
+          if __name__ == '__main__':
+              try:
+                  loop = asyncio.get_event_loop()
+              except RuntimeError:
+                  loop = asyncio.new_event_loop()
+                  asyncio.set_event_loop(loop)
+              loop.run_until_complete(main())
           EOF
           
           python transfer.py
