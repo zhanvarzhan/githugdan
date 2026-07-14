@@ -19,7 +19,6 @@ jobs:
       contents: write
       
     steps:
-      # اضافه شدن گام چک‌اوت برای حل خطای Git Repository
       - name: Checkout Code
         uses: actions/checkout@v4
 
@@ -179,14 +178,15 @@ jobs:
           
           python3 transfer.py
 
-      - name: Upload to GitHub Release (Native & Bulletproof)
+      - name: Upload to GitHub Release (Native & Stable)
         id: gh_release
         run: |
           FILE_PATH=$(cat file_info.txt)
           if [ -f "$FILE_PATH" ]; then
-            # ساخت ریلیز به همراه پاس دادن مستقیم Tag مورد نیاز
-            gh release create "${{ env.RELEASE_TAG }}" --repo "${{ env.GH_REPO }}" --title "Release ${{ env.RELEASE_TAG }}" --notes "Automated Cloud Storage" || true
-            # آپلود قطعی فایل روی ریلیز ساخته شده
+            # ساخت یا به روز رسانی تگ ریلیز با آرگومان دهی استاندارد و مستقیم
+            gh release create "${{ env.RELEASE_TAG }}" --repo "${{ env.GH_REPO }}" --title "Release ${{ env.RELEASE_TAG }}" --notes "Automated Cloud Storage Assets" || true
+            
+            # آپلود فایل با مشخص کردن تگ به عنوان آرگومان اصلی بدون تداخل با فلگ‌ها
             gh release upload "${{ env.RELEASE_TAG }}" "$FILE_PATH" --repo "${{ env.GH_REPO }}" --clobber
             echo "GH_STATUS=✅ موفق" >> $GITHUB_ENV
           else
