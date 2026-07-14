@@ -68,15 +68,13 @@ jobs:
                       return obj.file_id, file_name, obj.file_size
               return None, None, None
               
-          def split_file_for_bale(file_path, chunk_mb=45):
+          def split_file_for_bale(file_path, chunk_mb=10):
               chunk_size = chunk_mb * 1024 * 1024
               file_size = os.path.getsize(file_path)
               if file_size <= chunk_size:
                   return [file_path]
                   
-              # استخراج نام فایل و پسوند برای حفظ فرمت فایل در پارت‌ها
               base_name, ext = os.path.splitext(file_path)
-              
               chunks = []
               with open(file_path, 'rb') as f:
                   chunk_num = 1
@@ -84,7 +82,6 @@ jobs:
                       data = f.read(chunk_size)
                       if not data:
                           break
-                      # نام‌گذاری اصلاح شده: v0.9.25.part001.apk به جای v0.9.25.apk.part001
                       chunk_name = f"{base_name}.part{chunk_num:03d}{ext}"
                       with open(chunk_name, 'wb') as chunk_file:
                           chunk_file.write(data)
@@ -97,7 +94,6 @@ jobs:
                   return False
               url = f"https://tapi.bale.ai/bot{BALE_TOKEN}/sendDocument"
               try:
-                  # ارسال نام فایل تمیز در هدر ریکوئست
                   file_name = os.path.basename(file_path)
                   with open(file_path, 'rb') as f:
                       res = requests.post(
@@ -135,7 +131,7 @@ jobs:
               file_size_mb = file_size / (1024 * 1024)
               
               requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", 
-                            json={"chat_id": CHAT_ID, "text": f"📥 دانلود فایل «{file_name}» ({file_size_mb:.2f} MB) از تلگرام آغاز شد..."})
+                            json={"chat_id": CHAT_ID, "text": f"📥 دانلود فایل «{file_name}» ({file_size_mb:.2f} MB) آغاز شد..."})
 
               file_path = await app.download_media(msg)
               
@@ -181,17 +177,14 @@ jobs:
                               break
                       except Exception as e:
                           if attempt == 2:
-                              gh_status = f"❌ خطا در آپلود ریلیز ({str(e)})"
+                              gh_status = f"❌ خطا ({str(e)})"
               else:
                   gh_status = "❌ خطا در ساخت ریلیز"
                   
               # 3. پردازش و آپلود به بله
               bale_status = "⏳ در حال انجام..."
               if BALE_TOKEN and BALE_CHAT:
-                  requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", 
-                                json={"chat_id": CHAT_ID, "text": f"✂️ در حال آماده‌سازی و ارسال به پیام‌رسان بله..."})
-                  
-                  chunks = split_file_for_bale(file_path, chunk_mb=45)
+                  chunks = split_file_for_bale(file_path, chunk_mb=10)
                   total_chunks = len(chunks)
                   success_count = 0
                   
@@ -214,11 +207,9 @@ jobs:
               if os.path.exists(file_path):
                   os.remove(file_path)
 
-              # 4. گزارش نهایی به تلگرام
               report = (
                   f"🏁 فرآیند انتقال به تمام مقاصد انجام شد!\n\n"
                   f"📦 نام فایل: {file_name}\n"
-                  f"📊 حجم: {file_size_mb:.2f} MB\n"
                   f"🤗 هاگینگ‌فیس: {hf_status}\n"
                   f"🐙 گیت‌هاب: {gh_status}\n"
                   f"🟢 پیام‌رسان بله: {bale_status}"
