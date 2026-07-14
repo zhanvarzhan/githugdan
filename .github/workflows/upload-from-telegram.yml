@@ -2,6 +2,13 @@ name: Upload File (Telegram to GitHub & HF)
 
 on:
   workflow_dispatch:
+    inputs:
+      chat_id:
+        description: 'Telegram Chat ID'
+        required: true
+      message_id:
+        description: 'Telegram Message ID'
+        required: true
 
 jobs:
   download-and-upload:
@@ -31,6 +38,8 @@ jobs:
           HF_REPO_ID: "mrk7197/my-storage"
           HF_REPO_TYPE: "model"
           RELEASE_TAG: "v1.0.0"
+          CHAT_ID: ${{ github.event.inputs.chat_id }}
+          MESSAGE_ID: ${{ github.event.inputs.message_id }}
         run: |
           cat << 'EOF' > transfer.py
           import os
@@ -45,67 +54,39 @@ jobs:
           BOT_TOKEN = os.environ['TG_BOT_TOKEN']
           API_ID = int(os.environ['TG_API_ID'])
           API_HASH = os.environ['TG_API_HASH']
+          CHAT_ID = int(os.environ['CHAT_ID'])
+          MESSAGE_ID = int(os.environ['MESSAGE_ID'])
           
           def extract_file_details(msg):
-              """استخراج خودکار اطلاعات فایل حتی از پیام‌های فوروارد شده غیراستاندارد"""
               for attr in ["document", "video", "audio", "voice", "video_note", "animation", "photo"]:
                   obj = getattr(msg, attr, None)
                   if obj:
                       if attr == "photo":
                           return obj[-1].file_id, "photo.jpg", obj[-1].file_size
-                      
                       file_name = getattr(obj, "file_name", f"file_{obj.file_id[:8]}.{attr if attr != 'video' else 'mp4'}")
                       return obj.file_id, file_name, obj.file_size
               return None, None, None
-
-          def get_latest_message_with_media():
-              """دریافت آخرین پیام حاوی رسانه با اسکن دقیق‌تر سوابق دریافتی ربات"""
-              url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
-              try:
-                  res = requests.get(url).json()
-                  if res.get("ok") and res.get("result"):
-                      # چرخش معکوس برای پیدا کردن آخرین پیام ارسال شده حاوی فایل
-                      for update in reversed(res["result"]):
-                          # بررسی ساختارهای مختلف پیام (پیام عادی یا پیام ویرایش شده یا فورواردی)
-                          msg = update.get("message") or update.get("edited_message") or update.get("channel_post")
-                          if not msg:
-                              continue
-                          
-                          # اسکن تمام کلیدهای رسانه‌ای ممکن در بدنه پیام تلگرام
-                          media_keys = ["document", "video", "audio", "voice", "video_note", "animation", "photo"]
-                          if any(k in msg for k in media_keys):
-                              return msg["chat"]["id"], msg["message_id"]
-              except Exception as e:
-                  print(f"Error checking updates: {e}")
-              return None, None
           
           async def main():
-              chat_id, message_id = get_latest_message_with_media()
-              if not chat_id:
-                  print("❌ هیچ فایلی در پیام‌های اخیر ربات یافت نشد.")
-                  return
-          
               app = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
               await app.start()
               
-              msg = await app.get_messages(chat_id, message_id)
+              # خواندن مستقیم همان پیامی که فوروارد کرده‌اید
+              msg = await app.get_messages(CHAT_ID, MESSAGE_ID)
               file_id, file_name, file_size = extract_file_details(msg)
               
               if not file_id:
-                  print("❌ پیام پیدا شد اما حاوی فایل معتبر و قابل دانلودی نبود.")
+                  print("❌ فایل معتبری یافت نشد.")
                   await app.stop()
                   return
 
               file_size_mb = file_size / (1024 * 1024)
-              print(f"📥 فایل یافت شد: {file_name} ({file_size_mb:.2f} MB)")
               
-              # اطلاع‌رسانی شروع به کاربر در تلگرام
               requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", 
-                            json={"chat_id": chat_id, "text": f"📥 پردازش آغاز شد!\n📦 فایل: «{file_name}»\n⏳ در حال دریافت مستقیم از سرور تلگرام..."})
+                            json={"chat_id": CHAT_ID, "text": f"📥 دانلود مستقیم فایل «{file_name}» ({file_size_mb:.2f} MB) از سرور تلگرام آغاز شد..."})
 
               file_path = await app.download_media(msg)
-              print("✅ دانلود فایل از تلگرام با موفقیت تمام شد.")
-          
+              
               # آپلود هاگینگ فیس
               hf_status = "✅ موفق"
               try:
@@ -146,15 +127,15 @@ jobs:
               if os.path.exists(file_path):
                   os.remove(file_path)
 
-              # ارسال گزارش نهایی به تلگرام شما
+              # گزارش نهایی
               report = (
                   f"🏁 فرآیند انتقال با موفقیت انجام شد!\n\n"
                   f"📦 نام فایل: {file_name}\n"
-                  f"📊 حجم فایل: {file_size_mb:.2f} MB\n"
+                  f"📊 حجم: {file_size_mb:.2f} MB\n"
                   f"🤗 هاگینگ‌فیس: {hf_status}\n"
                   f"🐙 گیت‌هاب ریلیز: {gh_status}"
               )
-              requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": report})
+              requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": report})
           
           if __name__ == '__main__':
               loop = asyncio.get_event_loop()
