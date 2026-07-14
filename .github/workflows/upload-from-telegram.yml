@@ -13,7 +13,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11' # استفاده از یک نسخه پایدار
+          python-version: '3.11'
 
       - name: Install Libraries
         run: |
@@ -28,7 +28,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          HF_REPO_ID: "mrk7197/my-storage" # 🟢 اگر نام مخزن هاگینگ‌فیس شما چیزی غیر از my-storage است، آن را اینجا اصلاح کنید
+          HF_REPO_ID: "mrk7197/my-storage"
           HF_REPO_TYPE: "model"
           RELEASE_TAG: "v1.0.0"
         run: |
@@ -39,10 +39,8 @@ jobs:
           import nest_asyncio
           from huggingface_hub import HfApi
 
-          # حل مشکل قفل شدن ناگهانی حلقه‌های آسینک در پایتون‌های جدید
           nest_asyncio.apply()
           
-          # دور زدن ارور سیستم داخلی پایروگرام در زمان ایمپورت
           try:
               import uvloop
               asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
@@ -55,6 +53,12 @@ jobs:
           API_ID = int(os.environ['TG_API_ID'])
           API_HASH = os.environ['TG_API_HASH']
           
+          def send_telegram_notification(chat_id, text):
+              """تابع کمکی برای فرستادن پیام متنی از ربات به شما"""
+              if chat_id:
+                  url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+                  requests.post(url, json={"chat_id": chat_id, "text": text})
+
           def get_latest_document_info():
               url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
               try:
@@ -72,9 +76,11 @@ jobs:
           async def main():
               chat_id, message_id = get_latest_document_info()
               if not chat_id:
-                  print("❌ هیچ فایلی در پیام‌های اخیر ربات یافت نشد. (ابتدا فایل را به ربات ارسال کنید)")
+                  print("❌ هیچ فایلی در پیام‌های اخیر ربات یافت نشد.")
                   return
           
+              # 🟢 ربات به شما پیام می‌دهد که استارت کار خورد!
+              send_telegram_notification(chat_id, "🤖 موتور انتقال روشن شد! در حال اتصال و دانلود فایل شما از تلگرام...")
               print(f"🔍 فایل جدید در تلگرام شناسایی شد. در حال اتصال به سرورهای تلگرام...")
           
               app = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
@@ -88,6 +94,8 @@ jobs:
               file_path = await app.download_media(msg)
               print("✅ دانلود از تلگرام روی سرور موقت گیت‌هاب کامل شد.")
           
+              # شروع آپلود هاگینگ فیس
+              hf_status = "موفق"
               print("\n⏳ در حال آپلود به هاگینگ‌فیس...")
               hf_api = HfApi()
               try:
@@ -100,8 +108,11 @@ jobs:
                   )
                   print("✅ آپلود در هاگینگ‌فیس موفق بود.")
               except Exception as e:
+                  hf_status = f"خطا ({str(e)})"
                   print(f"❌ خطا در هاگینگ‌فیس: {str(e)}")
           
+              # شروع آپلود گیت‌هاب
+              gh_status = "موفق"
               print("\n⏳ در حال آپلود به گیت‌هاب...")
               gh_token = os.environ['GITHUB_TOKEN']
               gh_repo = os.environ['GH_REPO']
@@ -125,15 +136,26 @@ jobs:
                   if up_res.status_code == 201:
                       print("✅ آپلود در گیت‌هاب موفق بود.")
                   else:
+                      gh_status = f"خطا در آپلود ({up_res.status_code})"
                       print(f"❌ خطا در آپلود گیت‌هاب: {up_res.text}")
               else:
+                  gh_status = "خطا در ساخت ریلیز"
                   print("❌ خطا در پیدا کردن یا ساخت ریلیز گیت‌هاب")
                   
               await app.stop()
               if os.path.exists(file_path):
                   os.remove(file_path)
+
+              # 🟢 ربات در پایان کار گزارش نهایی را به تلگرام شما می‌فرستد
+              report_text = (
+                  f"✅ فرآیند انتقال به پایان رسید!\n\n"
+                  f"📦 نام فایل: {file_name}\n"
+                  f"📊 حجم فایل: {file_size_mb:.2f} MB\n"
+                  f"🤗 وضعیت هاگینگ‌فیس: {hf_status}\n"
+                  f"🐙 وضعیت گیت‌هاب ریلیز: {gh_status}"
+              )
+              send_telegram_notification(chat_id, report_text)
           
-          # راه اندازی ایمن تر لوپ با متد جدید نیتیو
           if __name__ == '__main__':
               try:
                   loop = asyncio.get_event_loop()
