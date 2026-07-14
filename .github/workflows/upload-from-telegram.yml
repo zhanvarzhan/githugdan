@@ -19,6 +19,10 @@ jobs:
       contents: write
       
     steps:
+      # اضافه شدن گام چک‌اوت برای حل خطای Git Repository
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
       - name: Install Libraries
         run: |
           python3 -m pip install --upgrade pip
@@ -138,7 +142,6 @@ jobs:
               except Exception as e:
                   hf_status = f"❌ خطا ({str(e)})"
               
-              # ایجاد یک فایل متنی کمکی برای ثبت نام فایل دانلود شده جهت استفاده در گام بعدی گیت‌هاب
               with open("file_info.txt", "w") as fi:
                   fi.write(file_path)
 
@@ -164,7 +167,6 @@ jobs:
               else:
                   bale_status = "❌ تنظیم نشده"
 
-              # ذخیره وضعیت بله و هاگینگ فیس برای گام نهایی
               with open("report_info.txt", "w") as ri:
                   ri.write(f"🤗 هاگینگ‌فیس: {hf_status}\n🟢 پیام‌رسان بله: {bale_status}")
 
@@ -182,9 +184,9 @@ jobs:
         run: |
           FILE_PATH=$(cat file_info.txt)
           if [ -f "$FILE_PATH" ]; then
-            # ساخت یا واکشی ریلیز با ابزار رسمی گیت‌هاب
+            # ساخت ریلیز به همراه پاس دادن مستقیم Tag مورد نیاز
             gh release create "${{ env.RELEASE_TAG }}" --repo "${{ env.GH_REPO }}" --title "Release ${{ env.RELEASE_TAG }}" --notes "Automated Cloud Storage" || true
-            # آپلود فایل با متد بومی لینوکس بدون خطای SSL
+            # آپلود قطعی فایل روی ریلیز ساخته شده
             gh release upload "${{ env.RELEASE_TAG }}" "$FILE_PATH" --repo "${{ env.GH_REPO }}" --clobber
             echo "GH_STATUS=✅ موفق" >> $GITHUB_ENV
           else
@@ -205,7 +207,6 @@ jobs:
           $OTHER_REPORTS
           🐙 گیت‌هاب: ${{ env.GH_STATUS }}"
           
-          # ارسال گزارش به تلگرام
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage" \
             -d "chat_id=${{ github.event.inputs.chat_id }}" \
             -d "text=$REPORT_TEXT"
