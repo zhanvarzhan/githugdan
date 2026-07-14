@@ -26,7 +26,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          HF_REPO_ID: "YourUsername/YourRepoName" # 🔴 نام کاربری و مخزن هاگینگ‌فیس خود را بنویسید
+          HF_REPO_ID: "mrk7197/my-storage" # 🔴 نام کاربری و مخزن هاگینگ‌فیس خود را بنویسید
           HF_REPO_TYPE: "model" # اگر دیتاست است، به "dataset" تغییر دهید
           RELEASE_TAG: "v1.0.0" # نام پوشه/نسخه‌ای که فایل‌ها در گیت‌هاب ذخیره می‌شوند
         run: |
