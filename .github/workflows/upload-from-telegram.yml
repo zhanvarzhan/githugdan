@@ -72,7 +72,7 @@ jobs:
                       return obj.file_id, file_name, obj.file_size
               return None, None, None
               
-          def split_file_for_bale(file_path, chunk_mb=10):
+          def split_file_for_bale(file_path, chunk_mb=40):
               chunk_size = chunk_mb * 1024 * 1024
               file_size = os.path.getsize(file_path)
               if file_size <= chunk_size:
