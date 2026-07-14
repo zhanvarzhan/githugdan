@@ -40,65 +40,72 @@ jobs:
           from huggingface_hub import HfApi
 
           nest_asyncio.apply()
-          
-          try:
-              import uvloop
-              asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-          except ImportError:
-              pass
-              
           from pyrogram import Client
           
           BOT_TOKEN = os.environ['TG_BOT_TOKEN']
           API_ID = int(os.environ['TG_API_ID'])
           API_HASH = os.environ['TG_API_HASH']
           
-          def send_telegram_notification(chat_id, text):
-              """تابع کمکی برای فرستادن پیام متنی از ربات به شما"""
-              if chat_id:
-                  url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-                  requests.post(url, json={"chat_id": chat_id, "text": text})
+          def extract_file_details(msg):
+              """استخراج خودکار اطلاعات فایل بدون توجه به فرمت آن"""
+              for attr in ["document", "video", "audio", "voice", "video_note", "animation", "photo"]:
+                  obj = getattr(msg, attr, None)
+                  if obj:
+                      if attr == "photo":
+                          # عکس‌ها لیست هستند، آخرین ارجاع با بالاترین کیفیت را برمی‌داریم
+                          return obj[-1].file_id, "photo.jpg", obj[-1].file_size
+                      
+                      # پیدا کردن نام فایل (برخی مدیاها نام ندارند که نام پیش‌فرض می‌گذاریم)
+                      file_name = getattr(obj, "file_name", f"file_{obj.file_id[:8]}.{attr if attr != 'video' else 'mp4'}")
+                      return obj.file_id, file_name, obj.file_size
+              return None, None, None
 
-          def get_latest_document_info():
+          def get_latest_message_with_media():
               url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
               try:
                   res = requests.get(url).json()
-                  if not res.get("ok") or not res.get("result"):
-                      return None, None
-                  for update in reversed(res["result"]):
-                      msg = update.get("message", {})
-                      if "document" in msg:
-                          return msg["chat"]["id"], msg["message_id"]
-              except Exception:
-                  pass
+                  if res.get("ok") and res.get("result"):
+                      for update in reversed(res["result"]):
+                          msg = update.get("message", {})
+                          # بررسی وجود هرگونه فایل یا رسانه در پیام
+                          for key in ["document", "video", "audio", "voice", "video_note", "animation", "photo"]:
+                              if key in msg:
+                                  return msg["chat"]["id"], msg["message_id"]
+              except Exception as e:
+                  print(f"Error getting updates: {e}")
               return None, None
           
           async def main():
-              chat_id, message_id = get_latest_document_info()
+              chat_id, message_id = get_latest_message_with_media()
               if not chat_id:
-                  print("❌ هیچ فایلی در پیام‌های اخیر ربات یافت نشد.")
+                  print("❌ هیچ فایلی (با هیچ فرمتی) در پیام‌های اخیر ربات یافت نشد.")
                   return
-          
-              # 🟢 ربات به شما پیام می‌دهد که استارت کار خورد!
-              send_telegram_notification(chat_id, "🤖 موتور انتقال روشن شد! در حال اتصال و دانلود فایل شما از تلگرام...")
-              print(f"🔍 فایل جدید در تلگرام شناسایی شد. در حال اتصال به سرورهای تلگرام...")
           
               app = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
               await app.start()
               
               msg = await app.get_messages(chat_id, message_id)
-              file_name = msg.document.file_name
-              file_size_mb = msg.document.file_size / (1024 * 1024)
-              print(f"📥 در حال دانلود: {file_name} ({file_size_mb:.2f} MB)")
+              file_id, file_name, file_size = extract_file_details(msg)
               
+              if not file_id:
+                  print("❌ پیام پیدا شد اما حاوی فایل قابل دانلودی نبود.")
+                  await app.stop()
+                  return
+
+              file_size_mb = file_size / (1024 * 1024)
+              print(f"📥 در حال دانلود فرمت شناسایی شده [{file_name.split('.')[-1]}] : {file_name} ({file_size_mb:.2f} MB)")
+              
+              # ارسال پیام شروع به کاربر
+              requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", 
+                            json={"chat_id": chat_id, "text": f"📥 فایل «{file_name}» شناسایی شد. فرآیند دانلود و آپلود آغاز گردید..."})
+
               file_path = await app.download_media(msg)
-              print("✅ دانلود از تلگرام روی سرور موقت گیت‌هاب کامل شد.")
+              print("✅ دانلود از تلگرام کامل شد.")
           
-              # شروع آپلود هاگینگ فیس
-              hf_status = "موفق"
-              print("\n⏳ در حال آپلود به هاگینگ‌فیس...")
-              hf_api = HfApi()
+              # آپلود هاگینگ فیس
+              hf_status = "✅ موفق"
               try:
+                  hf_api = HfApi()
                   hf_api.upload_file(
                       path_or_fileobj=file_path,
                       path_in_repo=file_name,
@@ -106,21 +113,17 @@ jobs:
                       repo_type=os.environ['HF_REPO_TYPE'],
                       token=os.environ['HF_TOKEN']
                   )
-                  print("✅ آپلود در هاگینگ‌فیس موفق بود.")
               except Exception as e:
-                  hf_status = f"خطا ({str(e)})"
-                  print(f"❌ خطا در هاگینگ‌فیس: {str(e)}")
+                  hf_status = f"❌ خطا ({str(e)})"
           
-              # شروع آپلود گیت‌هاب
-              gh_status = "موفق"
-              print("\n⏳ در حال آپلود به گیت‌هاب...")
+              # آپلود گیت‌هاب ریلیز
+              gh_status = "✅ موفق"
               gh_token = os.environ['GITHUB_TOKEN']
               gh_repo = os.environ['GH_REPO']
               rel_tag = os.environ['RELEASE_TAG']
               headers = {'Authorization': f'token {gh_token}', 'Accept': 'application/vnd.github.v3+json'}
               
-              rel_data = {"tag_name": rel_tag, "name": f"Release {rel_tag}"}
-              res = requests.post(f"https://api.github.com/repos/{gh_repo}/releases", json=rel_data, headers=headers)
+              res = requests.post(f"https://api.github.com/repos/{gh_repo}/releases", json={"tag_name": rel_tag, "name": f"Release {rel_tag}"}, headers=headers)
               if res.status_code == 201:
                   rel_id = res.json()['id']
               else:
@@ -131,37 +134,26 @@ jobs:
                   upload_url = f"https://uploads.github.com/repos/{gh_repo}/releases/{rel_id}/assets?name={file_name}"
                   headers['Content-Type'] = 'application/octet-stream'
                   with open(file_path, 'rb') as f:
-                      up_res = requests.post(upload_url, headers=headers, data=f)
-                      
-                  if up_res.status_code == 201:
-                      print("✅ آپلود در گیت‌هاب موفق بود.")
-                  else:
-                      gh_status = f"خطا در آپلود ({up_res.status_code})"
-                      print(f"❌ خطا در آپلود گیت‌هاب: {up_res.text}")
+                      requests.post(upload_url, headers=headers, data=f)
               else:
-                  gh_status = "خطا در ساخت ریلیز"
-                  print("❌ خطا در پیدا کردن یا ساخت ریلیز گیت‌هاب")
+                  gh_status = "❌ خطا در ساخت ریلیز"
                   
               await app.stop()
               if os.path.exists(file_path):
                   os.remove(file_path)
 
-              # 🟢 ربات در پایان کار گزارش نهایی را به تلگرام شما می‌فرستد
-              report_text = (
-                  f"✅ فرآیند انتقال به پایان رسید!\n\n"
+              # گزارش نهایی به تلگرام
+              report = (
+                  f"🏁 انتقال فایل با موفقیت به پایان رسید!\n\n"
                   f"📦 نام فایل: {file_name}\n"
-                  f"📊 حجم فایل: {file_size_mb:.2f} MB\n"
-                  f"🤗 وضعیت هاگینگ‌فیس: {hf_status}\n"
-                  f"🐙 وضعیت گیت‌هاب ریلیز: {gh_status}"
+                  f"📊 حجم: {file_size_mb:.2f} MB\n"
+                  f"🤗 هاگینگ‌فیس: {hf_status}\n"
+                  f"🐙 گیت‌هاب ریلیز: {gh_status}"
               )
-              send_telegram_notification(chat_id, report_text)
+              requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": chat_id, "text": report})
           
           if __name__ == '__main__':
-              try:
-                  loop = asyncio.get_event_loop()
-              except RuntimeError:
-                  loop = asyncio.new_event_loop()
-                  asyncio.set_event_loop(loop)
+              loop = asyncio.get_event_loop()
               loop.run_until_complete(main())
           EOF
           
