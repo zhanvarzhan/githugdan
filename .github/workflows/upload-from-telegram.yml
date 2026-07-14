@@ -178,15 +178,18 @@ jobs:
           
           python3 transfer.py
 
-      - name: Upload to GitHub Release (Native & Stable)
+      - name: Upload to GitHub Release (Robust Check & Upload)
         id: gh_release
         run: |
           FILE_PATH=$(cat file_info.txt)
           if [ -f "$FILE_PATH" ]; then
-            # ساخت یا به روز رسانی تگ ریلیز با آرگومان دهی استاندارد و مستقیم
-            gh release create "${{ env.RELEASE_TAG }}" --repo "${{ env.GH_REPO }}" --title "Release ${{ env.RELEASE_TAG }}" --notes "Automated Cloud Storage Assets" || true
+            # بررسی اینکه آیا تگ ریلیز از قبل وجود دارد یا خیر
+            if ! gh release view "${{ env.RELEASE_TAG }}" --repo "${{ env.GH_REPO }}" >/dev/null 2>&1; then
+              echo "Creating new release..."
+              gh release create "${{ env.RELEASE_TAG }}" --repo "${{ env.GH_REPO }}" --title "Release ${{ env.RELEASE_TAG }}" --notes "Automated Cloud Storage Assets"
+            fi
             
-            # آپلود فایل با مشخص کردن تگ به عنوان آرگومان اصلی بدون تداخل با فلگ‌ها
+            # آپلود قطعی فایل با آرگومان تگ در انتها (فرمت استاندارد غیرتعاملی)
             gh release upload "${{ env.RELEASE_TAG }}" "$FILE_PATH" --repo "${{ env.GH_REPO }}" --clobber
             echo "GH_STATUS=✅ موفق" >> $GITHUB_ENV
           else
