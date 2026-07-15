@@ -1,19 +1,20 @@
 import os
 import requests
+import asyncio
+from aiohttp import web
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 
-# ================= خواندن اطلاعات از سرور (امنیت بالا) =================
+# ================= خواندن اطلاعات از سرور =================
 API_ID = int(os.environ.get("TG_API_ID", 0))
 API_HASH = os.environ.get("TG_API_HASH")
 BOT_TOKEN = os.environ.get("TG_BOT_TOKEN")
 GITHUB_TOKEN = os.environ.get("GITHUB_PAT")
-GITHUB_REPO = os.environ.get("GITHUB_REPO") # مثال: mrk7197/githugdan
+GITHUB_REPO = os.environ.get("GITHUB_REPO") 
 WORKFLOW_FILE = "upload-from-telegram.yml"
-# =======================================================================
+# =========================================================
 
 app = Client("smart_ui_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
-
 user_selections = {}
 
 def get_keyboard(chat_id):
@@ -36,7 +37,7 @@ async def handle_file(client, message):
     user_selections[f"msg_{message.chat.id}"] = message.id
     
     await message.reply_text(
-        "📍 **مقاصد ذخیره‌سازی این فایل را انتخاب کنید:**\n\nبرای تغییر وضعیت روی دکمه‌ها کلیک کنید و در نهایت «شروع آپلود» را بزنید.",
+        "📍 **مقاصد ذخیره‌سازی این فایل را انتخاب کنید:**",
         reply_markup=get_keyboard(message.chat.id)
     )
 
@@ -58,7 +59,7 @@ async def button_handler(client, callback_query: CallbackQuery):
             await callback_query.answer("❌ حداقل یک مقصد باید انتخاب شود!", show_alert=True)
             return
             
-        await callback_query.message.edit_text("⚙️ در حال ارسال دستور به سرورهای گیت‌هاب اکشنز...")
+        await callback_query.message.edit_text("⚙️ در حال ارسال دستور به سرورهای گیت‌هاب...")
         
         msg_id = user_selections[f"msg_{chat_id}"]
         dest_str = ",".join(selected_targets)
@@ -80,10 +81,31 @@ async def button_handler(client, callback_query: CallbackQuery):
         response = requests.post(url, headers=headers, json=payload)
         
         if response.status_code == 204:
-            await callback_query.message.edit_text(f"✅ دستور با موفقیت به گیت‌هاب ارسال شد.\n\n🎯 مقاصد: {dest_str}\n\nمنتظر دریافت گزارش و لینک‌های دانلود باشید...")
+            await callback_query.message.edit_text(f"✅ دستور با موفقیت ارسال شد.\n\n🎯 مقاصد: {dest_str}\n\nمنتظر دریافت گزارش باشید...")
         else:
             await callback_query.message.edit_text(f"❌ خطا در ارتباط با گیت‌هاب:\n{response.text}")
 
+# ================= سرور وب مصنوعی برای فریب رندر =================
+async def web_hello(request):
+    return web.Response(text="Bot is running completely free on Render!")
+
+async def start_web_server():
+    web_app = web.Application()
+    web_app.router.add_get('/', web_hello)
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    # رندر یک پورت داینامیک اختصاص می‌دهد که باید از آن استفاده کنیم
+    port = int(os.environ.get('PORT', 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"🌍 Dummy Web Server is alive on port {port}")
+
+async def main():
+    await start_web_server()
+    await app.start()
+    print("🤖 UI Bot is actively listening...")
+    # روشن نگه داشتن ربات به صورت دائمی
+    await asyncio.Event().wait()
+
 if __name__ == '__main__':
-    print("🤖 Bot is starting...")
-    app.run()
+    asyncio.run(main())
