@@ -1,4 +1,4 @@
-name: Upload File (Telegram to GitHub, HF & Bale)
+name: Upload File (Telegram to GitHub, HF, Bale & FTP)
 
 on:
   workflow_dispatch:
@@ -23,6 +23,8 @@ jobs:
       RELEASE_TAG: "v1.0.0"
       HF_REPO_ID: "mrk7197/my-storage"
       HF_REPO_TYPE: "model"
+      # نام پوشه‌ای که می‌خواهید فایل‌ها در هاست آنجا ذخیره شوند
+      FTP_DIR: "team_backups"
 
     steps:
       - name: Checkout Code
@@ -41,6 +43,9 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           BALE_BOT_TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
           BALE_CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
+          FTP_HOST: ${{ secrets.FTP_HOST }}
+          FTP_USER: ${{ secrets.FTP_USER }}
+          FTP_PASS: ${{ secrets.FTP_PASS }}
           CHAT_ID: ${{ github.event.inputs.chat_id }}
           MESSAGE_ID: ${{ github.event.inputs.message_id }}
         run: |
@@ -49,6 +54,7 @@ jobs:
           import asyncio
           import requests
           import nest_asyncio
+          import ftplib
           from huggingface_hub import HfApi
 
           nest_asyncio.apply()
@@ -61,6 +67,12 @@ jobs:
           MESSAGE_ID = int(os.environ.get('MESSAGE_ID', 0))
           BALE_TOKEN = os.environ.get('BALE_BOT_TOKEN')
           BALE_CHAT = os.environ.get('BALE_CHAT_ID')
+          
+          # متغیرهای FTP
+          FTP_HOST = os.environ.get('FTP_HOST')
+          FTP_USER = os.environ.get('FTP_USER')
+          FTP_PASS = os.environ.get('FTP_PASS')
+          FTP_DIR = os.environ.get('FTP_DIR')
           
           def extract_file_details(msg):
               for attr in ["document", "video", "audio", "voice", "video_note", "animation", "photo"]:
@@ -85,7 +97,6 @@ jobs:
                       data = f.read(chunk_size)
                       if not data:
                           break
-                      # نام‌گذاری امن بدون داشتن پسوند خطرناک در انتهای نام فایل
                       chunk_name = f"{file_path}.part{chunk_num:03d}"
                       with open(chunk_name, 'wb') as chunk_file:
                           chunk_file.write(data)
@@ -95,24 +106,38 @@ jobs:
 
           def upload_to_bale(file_path, caption):
               if not BALE_TOKEN or not BALE_CHAT:
-                  print("⚠️ توکن بله یا Chat ID تنظیم نشده است.")
                   return False
               url = f"https://tapi.bale.ai/bot{BALE_TOKEN}/sendDocument"
               try:
                   file_name = os.path.basename(file_path)
                   with open(file_path, 'rb') as f:
-                      res = requests.post(
-                          url, 
-                          data={'chat_id': BALE_CHAT, 'caption': caption}, 
-                          files={'document': (file_name, f)}, 
-                          timeout=120
-                      )
-                  if res.status_code != 200:
-                      print(f"❌ خطا در ارسال پارت {file_name} به بله | کد وضعیت: {res.status_code} | پاسخ سرور: {res.text}")
+                      res = requests.post(url, data={'chat_id': BALE_CHAT, 'caption': caption}, files={'document': (file_name, f)}, timeout=120)
                   return res.status_code == 200
-              except Exception as e:
-                  print(f"❌ خطای ارتباطی با سرور بله: {str(e)}")
+              except:
                   return False
+                  
+          def upload_to_ftp(file_path):
+              if not FTP_HOST or not FTP_USER or not FTP_PASS:
+                  return "❌ تنظیم نشده"
+              try:
+                  ftp = ftplib.FTP(FTP_HOST)
+                  ftp.login(FTP_USER, FTP_PASS)
+                  
+                  if FTP_DIR:
+                      try:
+                          ftp.cwd(FTP_DIR)
+                      except ftplib.error_perm:
+                          ftp.mkd(FTP_DIR)
+                          ftp.cwd(FTP_DIR)
+                          
+                  file_name = os.path.basename(file_path)
+                  with open(file_path, 'rb') as f:
+                      ftp.storbinary(f"STOR {file_name}", f)
+                  ftp.quit()
+                  return "✅ موفق"
+              except Exception as e:
+                  print(f"❌ خطای FTP: {e}")
+                  return f"❌ خطا"
 
           async def main():
               app = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
@@ -132,38 +157,32 @@ jobs:
 
               file_path = await app.download_media(msg)
               
-              # 1. آپلود هاگینگ فیس
+              # 1. آپلود به هاست وردپرس (FTP)
+              ftp_status = upload_to_ftp(file_path)
+              
+              # 2. آپلود هاگینگ فیس
               hf_status = "✅ موفق"
               try:
                   hf_api = HfApi()
-                  hf_api.upload_file(
-                      path_or_fileobj=file_path,
-                      path_in_repo=file_name,
-                      repo_id=os.environ['HF_REPO_ID'],
-                      repo_type=os.environ['HF_REPO_TYPE'],
-                      token=os.environ['HF_TOKEN']
-                  )
+                  hf_api.upload_file(path_or_fileobj=file_path, path_in_repo=file_name, repo_id=os.environ['HF_REPO_ID'], repo_type=os.environ['HF_REPO_TYPE'], token=os.environ['HF_TOKEN'])
               except Exception as e:
-                  hf_status = f"❌ خطا ({str(e)})"
+                  hf_status = f"❌ خطا"
               
               with open("file_info.txt", "w") as fi:
                   fi.write(file_path)
 
-              # 2. پردازش و آپلود به بله (تنظیم مجدد روی 10 مگابایت به دلیل محدودیت وب‌سرور بله)
+              # 3. پردازش و آپلود به بله (پارت‌های 10 مگابایتی)
               bale_status = "⏳ در حال انجام..."
               if BALE_TOKEN and BALE_CHAT:
                   chunks = split_file_for_bale(file_path, chunk_mb=10)
                   total_chunks = len(chunks)
                   success_count = 0
-                  
                   for i, chunk in enumerate(chunks, 1):
                       caption = f"📦 {file_name}\nپارت {i} از {total_chunks}" if total_chunks > 1 else f"📦 {file_name}"
                       if upload_to_bale(chunk, caption):
                           success_count += 1
-                      
                       if chunk != file_path and os.path.exists(chunk):
                           os.remove(chunk)
-                  
                   if success_count == total_chunks:
                       bale_status = f"✅ موفق ({total_chunks} پارت)"
                   else:
@@ -172,7 +191,7 @@ jobs:
                   bale_status = "❌ تنظیم نشده"
 
               with open("report_info.txt", "w") as ri:
-                  ri.write(f"🤗 هاگینگ‌فیس: {hf_status}\n🟢 پیام‌رسان بله: {bale_status}")
+                  ri.write(f"🌐 هاست سایت: {ftp_status}\n🤗 هاگینگ‌فیس: {hf_status}\n🟢 پیام‌رسان بله: {bale_status}")
 
               await app.stop()
           
@@ -189,7 +208,6 @@ jobs:
           FILE_PATH=$(cat file_info.txt)
           if [ -f "$FILE_PATH" ]; then
             if ! gh release view "${{ env.RELEASE_TAG }}" --repo "${{ env.GH_REPO }}" >/dev/null 2>&1; then
-              echo "Creating new release..."
               gh release create "${{ env.RELEASE_TAG }}" --repo "${{ env.GH_REPO }}" --title "Release ${{ env.RELEASE_TAG }}" --notes "Automated Cloud Storage Assets"
             fi
             gh release upload "${{ env.RELEASE_TAG }}" "$FILE_PATH" --repo "${{ env.GH_REPO }}" --clobber
