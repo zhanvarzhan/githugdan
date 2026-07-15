@@ -1,6 +1,15 @@
-import os
-import requests
 import asyncio
+import os
+
+# ================= 🛑 رفع باگ ناسازگاری پایروگرام با پایتون جدید =================
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+# =========================================================================
+
+import requests
 from aiohttp import web
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -94,7 +103,6 @@ async def start_web_server():
     web_app.router.add_get('/', web_hello)
     runner = web.AppRunner(web_app)
     await runner.setup()
-    # رندر یک پورت داینامیک اختصاص می‌دهد که باید از آن استفاده کنیم
     port = int(os.environ.get('PORT', 8080))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
@@ -104,7 +112,6 @@ async def main():
     await start_web_server()
     await app.start()
     print("🤖 UI Bot is actively listening...")
-    # روشن نگه داشتن ربات به صورت دائمی
     await asyncio.Event().wait()
 
 if __name__ == '__main__':
