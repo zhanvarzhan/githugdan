@@ -167,7 +167,7 @@ jobs:
                   return f"❌ خطا"
 
           async def main():
-              app = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
+              app = Client("user_session", api_id=API_ID, api_hash=API_HASH, in_memory=True)
               await app.start()
               
               print(f"🔍 در حال دریافت پیام {MESSAGE_ID} از چت {CHAT_ID}...")
