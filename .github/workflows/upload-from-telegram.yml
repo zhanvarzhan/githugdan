@@ -1,254 +1,50 @@
-name: Upload File (Dynamic Router)
+name: Upload File from Telegram
+
+# این اکشن زمانی اجرا می‌شود که ورکر کلادفلر یک سیگنال (Repository Dispatch) ارسال کند
 on:
-  workflow_dispatch:
-    inputs:
-      chat_id:
-        required: true
-        type: string
-      message_id:
-        required: true
-        type: string
-      github_enabled:
-        required: true
-        default: 'true'
-        type: string
-      hf_enabled:
-        required: true
-        default: 'true'
-        type: string
-      bale_enabled:
-        required: true
-        default: 'true'
-        type: string
-      ftp_enabled:
-        required: true
-        default: 'false'
-        type: string
-      auto_delete_hours:
-        required: true
-        default: '0'
-        type: string
+  repository_dispatch:
+    types: [telegram_upload]
+
+# مجوزهای لازم برای نوشتن و آپلود فایل در ریپازیتوری
+permissions:
+  contents: write
 
 jobs:
-  download-and-upload:
+  download_and_upload:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    env:
-      GH_REPO: ${{ github.repository }}
-      RELEASE_TAG: "v1.0.0"
-      HF_REPO_ID: "mrk7197/my-storage" # بر اساس سناریو
-      HF_REPO_TYPE: "model"
-      FTP_DIR: "team_backups" # پوشه ذخیره‌سازی روی هاست وردپرس
+
     steps:
-      - name: Checkout Code
+      # ۱. دریافت آخرین کدهای ریپازیتوری شما
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Libraries
-        run: |
-          python3 -m pip install --upgrade pip
-          pip3 install pyrogram tgcrypto huggingface_hub requests nest_asyncio
+      # ۲. نصب و راه‌اندازی پایتون روی سرور گیت‌هاب
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
 
-      - name: Run Transfer Engine
+      # ۳. نصب کتابخانه‌های مورد نیاز پایتون
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pyrogram tgcrypto huggingface_hub
+
+      # ۴. اجرای اسکریپت پایتون برای دانلود از تلگرام و آپلود به مقصد
+      - name: Run Transfer Script
         env:
+          # توکن‌ها و سکرت‌های امنیتی که از بخش Settings > Secrets گیت‌هاب خوانده می‌شوند
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_API_ID: ${{ secrets.TG_API_ID }}
           TG_API_HASH: ${{ secrets.TG_API_HASH }}
+          TG_SESSION_STRING: ${{ secrets.TG_SESSION_STRING }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          BALE_BOT_TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
-          BALE_CHAT_ID: ${{ secrets.BALE_CHAT_ID }}
-          FTP_HOST: ${{ secrets.FTP_HOST }}
-          FTP_USER: ${{ secrets.FTP_USER }}
-          FTP_PASS: ${{ secrets.FTP_PASS }}
-          CHAT_ID: ${{ github.event.inputs.chat_id }}
-          MESSAGE_ID: ${{ github.event.inputs.message_id }}
-          HF_ENABLED: ${{ github.event.inputs.hf_enabled }}
-          BALE_ENABLED: ${{ github.event.inputs.bale_enabled }}
-          FTP_ENABLED: ${{ github.event.inputs.ftp_enabled }}
-        run: |
-          cat << 'EOF' > transfer.py
-          import os, asyncio, requests, nest_asyncio, ftplib
-          from huggingface_hub import HfApi
-          nest_asyncio.apply()
-          from pyrogram import Client
-
-          BOT_TOKEN = os.environ.get('TG_BOT_TOKEN')
-          API_ID = int(os.environ.get('TG_API_ID', 0))
-          API_HASH = os.environ.get('TG_API_HASH')
-          CHAT_ID = int(os.environ.get('CHAT_ID', 0))
-          MESSAGE_ID = int(os.environ.get('MESSAGE_ID', 0))
-          
-          # بررسی فعال یا غیرفعال بودن آپلودها بر اساس دستور ورکر کلادفلر
-          HF_ENABLED = os.environ.get('HF_ENABLED') == 'true'
-          BALE_ENABLED = os.environ.get('BALE_ENABLED') == 'true'
-          FTP_ENABLED = os.environ.get('FTP_ENABLED') == 'true'
-
-          def extract_file_details(msg):
-              for attr in ["document", "video", "audio", "voice", "video_note", "animation", "photo"]:
-                  obj = getattr(msg, attr, None)
-                  if obj:
-                      if attr == "photo":
-                          return obj[-1].file_id, "photo.jpg", obj[-1].file_size
-                      file_name = getattr(obj, "file_name", f"file_{obj.file_id[:8]}.{attr if attr != 'video' else 'mp4'}")
-                      return obj.file_id, file_name, obj.file_size
-              return None, None, None
-
-          def split_file_for_bale(file_path, chunk_mb=10):
-              chunk_size = chunk_mb * 1024 * 1024
-              file_size = os.path.getsize(file_path)
-              if file_size <= chunk_size:
-                  return [file_path]
-              chunks = []
-              with open(file_path, 'rb') as f:
-                  chunk_num = 1
-                  while True:
-                      data = f.read(chunk_size)
-                      if not data: break
-                      chunk_name = f"{file_path}.part{chunk_num:03d}"
-                      with open(chunk_name, 'wb') as chunk_file:
-                          chunk_file.write(data)
-                      chunks.append(chunk_name)
-                      chunk_num += 1
-              return chunks
-
-          def upload_to_bale(file_path, caption):
-              token = os.environ.get('BALE_BOT_TOKEN')
-              chat = os.environ.get('BALE_CHAT_ID')
-              if not token or not chat: return False
-              url = f"https://tapi.bale.ai/bot{token}/sendDocument"
-              try:
-                  file_name = os.path.basename(file_path)
-                  with open(file_path, 'rb') as f:
-                      res = requests.post(url, data={'chat_id': chat, 'caption': caption}, files={'document': (file_name, f)}, timeout=120)
-                  return res.status_code == 200
-              except: return False
-
-          def upload_to_ftp(file_path):
-              host = os.environ.get('FTP_HOST')
-              user = os.environ.get('FTP_USER')
-              password = os.environ.get('FTP_PASS')
-              folder = "team_backups"
-              if not host or not user or not password: return "تنظیم نشده"
-              try:
-                  ftp = ftplib.FTP()
-                  ftp.connect(host, 21, timeout=30)
-                  ftp.login(user, password)
-                  try: ftp.cwd(folder)
-                  except:
-                      ftp.mkd(folder)
-                      ftp.cwd(folder)
-                  with open(file_path, 'rb') as f:
-                      ftp.storbinary(f"STOR {os.path.basename(file_path)}", f)
-                  ftp.quit()
-                  return "موفق"
-              except Exception as e:
-                  return f"خطا: {str(e)}"
-
-          async def main():
-              app = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
-              await app.start()
-              msg = await app.get_messages(CHAT_ID, MESSAGE_ID)
-              file_id, file_name, file_size = extract_file_details(msg)
-              
-              if not file_id:
-                  await app.stop()
-                  return
-              
-              file_path = await app.download_media(msg)
-              with open("file_info.txt", "w") as fi:
-                  fi.write(file_path)
-
-              # ۱. آپلود به هاست شخصی (FTP)
-              ftp_status = "غیرفعال"
-              if FTP_ENABLED:
-                  ftp_status = upload_to_ftp(file_path)
-
-              # ۲. آپلود به هاگینگ‌فیس
-              hf_status = "غیرفعال"
-              if HF_ENABLED:
-                  try:
-                      hf_api = HfApi()
-                      hf_api.upload_file(
-                          path_or_fileobj=file_path,
-                          path_in_repo=file_name,
-                          repo_id=os.environ['HF_REPO_ID'],
-                          repo_type=os.environ['HF_REPO_TYPE'],
-                          token=os.environ['HF_TOKEN']
-                      )
-                      hf_status = "✅ موفق"
-                  except Exception as e:
-                      hf_status = f"❌ خطا ({str(e)})"
-
-              # ۳. آپلود پارت‌های امن ۱۰ مگابایتی به بله
-              bale_status = "غیرفعال"
-              if BALE_ENABLED:
-                  chunks = split_file_for_bale(file_path, chunk_mb=10)[cite: 1]
-                  total_chunks = len(chunks)
-                  success_count = 0
-                  for i, chunk in enumerate(chunks, 1):
-                      caption = f"📦 {file_name}\nپارت {i} از {total_chunks}" if total_chunks > 1 else f"📦 {file_name}"
-                      if upload_to_bale(chunk, caption):
-                          success_count += 1
-                      if chunk != file_path and os.path.exists(chunk):
-                          os.remove(chunk)
-                  
-                  if success_count == total_chunks:
-                      bale_status = f"✅ موفق ({total_chunks} پارت)"
-                  else:
-                      bale_status = f"⚠️ ناقص ({success_count} از {total_chunks} پارت)"
-
-              with open("report_info.txt", "w") as ri:
-                  ri.write(f"{ftp_status}\n{hf_status}\n{bale_status}")
-
-              await app.stop()
-
-          if __name__ == '__main__':
-              asyncio.run(main())
-          EOF
-          python3 transfer.py
-
-      - name: Upload to GitHub Release
-        id: gh_release
-        if: ${{ github.event.inputs.github_enabled == 'true' }}
-        run: |
-          FILE_PATH=$(cat file_info.txt)
-          if [ -f "$FILE_PATH" ]; then
-            if ! gh release view "${{ env.RELEASE_TAG }}" --repo "${{ env.GH_REPO }}" >/dev/null 2>&1; then
-              gh release create "${{ env.RELEASE_TAG }}" --repo "${{ env.GH_REPO }}" --title "Release ${{ env.RELEASE_TAG }}"
-            fi
-            gh release upload "${{ env.RELEASE_TAG }}" "$FILE_PATH" --repo "${{ env.GH_REPO }}" --clobber
-            echo "GH_STATUS=موفق" >> $GITHUB_ENV
-          else
-            echo "GH_STATUS=خطا در یافتن فایل" >> $GITHUB_ENV
-          fi
-        env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Callback Report to Cloudflare Worker
-        run: |
-          FILE_PATH=$(cat file_info.txt)
-          FILE_NAME=$(basename "$FILE_PATH")
           
-          # خواندن نتایج مراحل قبلی
-          FTP_STATUS=$(sed -n '1p' report_info.txt)
-          HF_STATUS=$(sed -n '2p' report_info.txt)
-          BALE_STATUS=$(sed -n '3p' report_info.txt)
-          GH_STATUS="${{ env.GH_STATUS }}"
-          if [ -z "$GH_STATUS" ]; then GH_STATUS="غیرفعال"; fi
-
-          # ارسال نتایج به هوش ورکر برای تجمیع و فرستادن لینک‌ها
-          curl -X POST "https://آدرس_ورکر_کلادفلر_شما.workers.dev" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "type": "upload_complete",
-              "chat_id": "${{ github.event.inputs.chat_id }}",
-              "file_name": "'"$FILE_NAME"'",
-              "github_status": "'"$GH_STATUS"'",
-              "hf_status": "'"$HF_STATUS"'",
-              "bale_status": "'"$BALE_STATUS"'",
-              "ftp_status": "'"$FTP_STATUS"'",
-              "github_enabled": "${{ github.event.inputs.github_enabled }}",
-              "hf_enabled": "${{ github.event.inputs.hf_enabled }}",
-              "ftp_enabled": "${{ github.event.inputs.ftp_enabled }}",
-              "auto_delete_hours": "${{ github.event.inputs.auto_delete_hours }}"
-            }'
+          # اطلاعاتی که ورکر کلادفلر به عنوان Payload ارسال کرده است
+          FILE_ID: ${{ github.event.client_payload.file_id }}
+          FILE_NAME: ${{ github.event.client_payload.file_name }}
+          FILE_SIZE: ${{ github.event.client_payload.file_size }}
+          CHAT_ID: ${{ github.event.client_payload.chat_id }}
+        run: |
+          python transfer.py
