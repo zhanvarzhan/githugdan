@@ -86,11 +86,18 @@ jobs:
           MESSAGE_ID = safe_int(os.environ.get('MESSAGE_ID'))
           
           def extract_file_details(msg):
+              # بررسی فایل در پیام مستقیم یا پیام فوروارد شده
+              target_msg = msg
+              # اگر پیام فوروارد شده بود، جزئیات فایل همچنان روی بدنه اصلی پیام در دسترس است
+              if getattr(msg, "forward_from_chat", None) or getattr(msg, "forward_origin", None):
+                  target_msg = msg
+
               for attr in ["document", "video", "audio", "voice", "video_note", "animation", "photo"]:
-                  obj = getattr(msg, attr, None)
+                  obj = getattr(target_msg, attr, None)
                   if obj:
                       if attr == "photo":
-                          return obj[-1].file_id, "photo.jpg", obj[-1].file_size
+                          photo_obj = obj[-1] if isinstance(obj, list) else obj
+                          return photo_obj.file_id, "photo.jpg", photo_obj.file_size
                       file_name = getattr(obj, "file_name", f"file_{obj.file_id[:8]}.{attr if attr != 'video' else 'mp4'}")
                       return obj.file_id, file_name, obj.file_size
               return None, None, None
@@ -139,7 +146,6 @@ jobs:
               if not FTP_HOST or not FTP_USER or not FTP_PASS:
                   return "❌ تنظیم نشده"
               try:
-                  # ست کردن تایم‌اوت ۳۰ ثانیه‌ای برای جلوگیری از معلق ماندن دائمی اکشنز
                   ftp = ftplib.FTP()
                   ftp.connect(FTP_HOST, timeout=30)
                   ftp.login(FTP_USER, FTP_PASS)
@@ -210,7 +216,6 @@ jobs:
                       caption = f"📦 {file_name}\nپارت {i} از {total_chunks}" if total_chunks > 1 else f"📦 {file_name}"
                       if upload_to_bale(chunk, caption):
                           success_count += 1
-                      # حذف پارت موقت پس از اتمام (به جز در صورتی که خود فایل اصلی باشد)
                       if chunk != file_path and os.path.exists(chunk):
                           os.remove(chunk)
                   if success_count == total_chunks:
