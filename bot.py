@@ -40,6 +40,15 @@ def get_keyboard(chat_id):
         [InlineKeyboardButton("🚀 شروع آپلود", callback_data="start_upload")]
     ])
 
+# --- اضافه شدن دکمه استارت جهت تست زنده بودن ---
+@app.on_message(filters.command("start"))
+async def start_command(client, message):
+    await message.reply_text(
+        "👋 **سلام مهندس کامرانی گرامی!**\n\n"
+        "من بیدارم و آماده‌ام کارها را به صورت منظم مدیریت کنم. 🤖\n\n"
+        "📁 **فایل خود را بفرستید** تا منوی هوشمند انتخاب مقاصد برای شما نمایش داده شود."
+    )
+
 @app.on_message(filters.document | filters.video | filters.audio | filters.photo)
 async def handle_file(client, message):
     user_selections[message.chat.id] = {'GH': True, 'HF': True, 'FTP': True, 'BALE': True}
@@ -106,12 +115,12 @@ async def start_web_server():
     port = int(os.environ.get('PORT', 8080))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    print(f"🌍 Dummy Web Server is alive on port {port}")
+    print(f"🌍 Dummy Web Server is alive on port {port}", flush=True)
 
 async def main():
     await start_web_server()
     await app.start()
-    print("🤖 UI Bot is actively listening...")
+    print("🤖 UI Bot is actively listening...", flush=True)
     await asyncio.Event().wait()
 
 if __name__ == '__main__':
