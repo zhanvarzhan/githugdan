@@ -1,6 +1,5 @@
-name: Upload File (Telegram to GitHub, HF, Bale & FTP)
+name: Upload File (Smart Router & Links)
 
-# پشتیبانی همزمان از اجرای دستی و اجرای خودکار توسط ورکر کلادفلر
 on:
   workflow_dispatch:
     inputs:
@@ -12,8 +11,10 @@ on:
         description: 'Telegram Message ID'
         required: true
         type: string
-  repository_dispatch:
-    types: [telegram_upload]
+      destinations:
+        description: 'Selected targets (e.g., GH,HF,FTP,BALE)'
+        required: true
+        default: 'GH,HF,FTP,BALE'
 
 jobs:
   download-and-upload:
@@ -21,17 +22,12 @@ jobs:
     permissions:
       contents: write
       
-    # تعریف متغیرهای سراسری در سطح جاب برای دسترسی در تمام مراحل (Steps)
     env:
       GH_REPO: ${{ github.repository }}
       RELEASE_TAG: "v1.0.0"
       HF_REPO_ID: "mrk7197/my-storage"
       HF_REPO_TYPE: "model"
-      # نام پوشه‌ای که می‌خواهید فایل‌ها در هاست آنجا ذخیره شوند
       FTP_DIR: "team_backups"
-      # تشخیص هوشمند مقدار ورودی، چه از طریق اجرای دستی و چه از طریق وب‌هوک ورکر
-      CHAT_ID: ${{ github.event.inputs.chat_id || github.event.client_payload.chat_id }}
-      MESSAGE_ID: ${{ github.event.inputs.message_id || github.event.client_payload.message_id }}
 
     steps:
       - name: Checkout Code
@@ -40,7 +36,7 @@ jobs:
       - name: Install Libraries
         run: |
           python3 -m pip install --upgrade pip
-          pip3 install pyrogram tgcrypto huggingface_hub requests
+          pip3 install pyrogram tgcrypto huggingface_hub requests nest_asyncio
 
       - name: Run Transfer Engine
         env:
@@ -53,219 +49,122 @@ jobs:
           FTP_HOST: ${{ secrets.FTP_HOST }}
           FTP_USER: ${{ secrets.FTP_USER }}
           FTP_PASS: ${{ secrets.FTP_PASS }}
+          CHAT_ID: ${{ github.event.inputs.chat_id }}
+          MESSAGE_ID: ${{ github.event.inputs.message_id }}
+          DESTINATIONS: ${{ github.event.inputs.destinations }}
         run: |
           cat << 'EOF' > transfer.py
           import os
           import asyncio
           import requests
+          import nest_asyncio
           import ftplib
-          import shutil
           from huggingface_hub import HfApi
+
+          nest_asyncio.apply()
           from pyrogram import Client
           
           BOT_TOKEN = os.environ.get('TG_BOT_TOKEN')
-          API_ID = int(os.environ.get('TG_API_ID', 0)) if os.environ.get('TG_API_ID') else 0
+          API_ID = int(os.environ.get('TG_API_ID', 0))
           API_HASH = os.environ.get('TG_API_HASH')
+          CHAT_ID = int(os.environ.get('CHAT_ID', 0))
+          MESSAGE_ID = int(os.environ.get('MESSAGE_ID', 0))
           BALE_TOKEN = os.environ.get('BALE_BOT_TOKEN')
           BALE_CHAT = os.environ.get('BALE_CHAT_ID')
-          
-          # متغیرهای FTP
-          FTP_HOST = os.environ.get('FTP_HOST')
-          FTP_USER = os.environ.get('FTP_USER')
-          FTP_PASS = os.environ.get('FTP_PASS')
-          FTP_DIR = os.environ.get('FTP_DIR')
-          
-          # تبدیل امن رشته به عدد برای جلوگیری از کرش
-          def safe_int(val, default=0):
-              try:
-                  return int(val) if val else default
-              except ValueError:
-                  return default
-
-          CHAT_ID = safe_int(os.environ.get('CHAT_ID'))
-          MESSAGE_ID = safe_int(os.environ.get('MESSAGE_ID'))
+          DESTINATIONS = os.environ.get('DESTINATIONS', '').split(',')
           
           def extract_file_details(msg):
-              if not msg:
-                  return None, None, None
-              target_msg = msg
-              # پشتیبانی از پیام‌های مستقیم و فوروارد شده
-              if getattr(msg, "forward_from_chat", None) or getattr(msg, "forward_origin", None):
-                  target_msg = msg
-
               for attr in ["document", "video", "audio", "voice", "video_note", "animation", "photo"]:
-                  obj = getattr(target_msg, attr, None)
+                  obj = getattr(msg, attr, None)
                   if obj:
-                      if attr == "photo":
-                          photo_obj = obj[-1] if isinstance(obj, list) else obj
-                          return photo_obj.file_id, "photo.jpg", photo_obj.file_size
-                      file_name = getattr(obj, "file_name", f"file_{obj.file_id[:8]}.{attr if attr != 'video' else 'mp4'}")
+                      file_name = getattr(obj, "file_name", f"file_{obj.file_id[:8]}.{attr}")
                       return obj.file_id, file_name, obj.file_size
               return None, None, None
-              
-          def split_file_for_bale(file_path, chunk_mb=10):
-              chunk_size = chunk_mb * 1024 * 1024
-              file_size = os.path.getsize(file_path)
-              
-              if file_size <= chunk_size:
-                  safe_path = f"{file_path}.part001"
-                  shutil.copy2(file_path, safe_path)
-                  return [safe_path]
-                  
-              chunks = []
-              with open(file_path, 'rb') as f:
-                  chunk_num = 1
-                  while True:
-                      data = f.read(chunk_size)
-                      if not data:
-                          break
-                      chunk_name = f"{file_path}.part{chunk_num:03d}"
-                      with open(chunk_name, 'wb') as chunk_file:
-                          chunk_file.write(data)
-                      chunks.append(chunk_name)
-                      chunk_num += 1
-              return chunks
-
-          def upload_to_bale(file_path, caption):
-              if not BALE_TOKEN or not BALE_CHAT:
-                  return False
-              url = f"https://tapi.bale.ai/bot{BALE_TOKEN}/sendDocument"
-              try:
-                  file_name = os.path.basename(file_path)
-                  with open(file_path, 'rb') as f:
-                      res = requests.post(url, data={'chat_id': BALE_CHAT, 'caption': caption}, files={'document': (file_name, f)}, timeout=120)
-                  if res.status_code != 200:
-                      print(f"❌ خطا در ارسال پارت {file_name} به بله | کد: {res.status_code} | پاسخ: {res.text}")
-                  return res.status_code == 200
-              except Exception as e:
-                  print(f"❌ خطای ارتباطی با بله: {e}")
-                  return False
-                  
-          def upload_to_ftp(file_path):
-              if not FTP_HOST or not FTP_USER or not FTP_PASS:
-                  return "❌ تنظیم نشده"
-              try:
-                  ftp = ftplib.FTP()
-                  ftp.connect(FTP_HOST, timeout=30)
-                  ftp.login(FTP_USER, FTP_PASS)
-                  ftp.set_pasv(True)
-                  
-                  if FTP_DIR:
-                      try:
-                          ftp.cwd(FTP_DIR)
-                      except ftplib.error_perm:
-                          ftp.mkd(FTP_DIR)
-                          ftp.cwd(FTP_DIR)
-                          
-                  file_name = os.path.basename(file_path)
-                  with open(file_path, 'rb') as f:
-                      ftp.storbinary(f"STOR {file_name}", f)
-                  ftp.quit()
-                  return "✅ موفق"
-              except Exception as e:
-                  print(f"❌ خطای FTP: {e}")
-                  return f"❌ خطا"
 
           async def main():
-              app = Client("user_session", api_id=API_ID, api_hash=API_HASH, in_memory=True)
+              app = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
               await app.start()
               
-              print(f"🔍 در حال دریافت پیام {MESSAGE_ID} از چت {CHAT_ID}...")
               msg = await app.get_messages(CHAT_ID, MESSAGE_ID)
               file_id, file_name, file_size = extract_file_details(msg)
               
               if not file_id:
-                  print("❌ فایل معتبری یافت نشد.")
                   await app.stop()
                   return
 
-              file_size_mb = file_size / (1024 * 1024)
-              requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", 
-                            json={"chat_id": CHAT_ID, "text": f"📥 دانلود فایل «{file_name}» ({file_size_mb:.2f} MB) آغاز شد..."})
-
+              requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": f"📥 در حال پردازش فایل «{file_name}» بر اساس مقاصد انتخابی..."})
               file_path = await app.download_media(msg)
-              print(f"✅ دانلود موفقیت‌آمیز فایل: {file_path}")
               
-              # ذخیره مسیر فایل برای مراحل بعدی گیت‌هاب
-              with open("file_info.txt", "w") as fi:
-                  fi.write(file_path)
-
-              # ۱. آپلود به هاست شخصی (FTP)
-              ftp_status = upload_to_ftp(file_path)
+              report_text = f"🏁 **گزارش انتقال هوشمند**\n\n📦 نام فایل: `{file_name}`\n"
               
-              # ۲. آپلود به هاگینگ‌فیس
-              hf_status = "✅ موفق"
-              try:
-                  hf_api = HfApi()
-                  hf_api.upload_file(
-                      path_or_fileobj=file_path, 
-                      path_in_repo=file_name, 
-                      repo_id=os.environ['HF_REPO_ID'], 
-                      repo_type=os.environ['HF_REPO_TYPE'], 
-                      token=os.environ['HF_TOKEN']
-                  )
-              except Exception as e:
-                  print(f"❌ خطای هاگینگ‌فیس: {e}")
-                  hf_status = f"❌ خطا"
-
-              # ۳. پردازش و آپلود به بله (پارت‌های ایمن ۱۰ مگابایتی)
-              bale_status = "⏳ در حال انجام..."
-              if BALE_TOKEN and BALE_CHAT:
-                  chunks = split_file_for_bale(file_path, chunk_mb=10)
-                  total_chunks = len(chunks)
-                  success_count = 0
-                  for i, chunk in enumerate(chunks, 1):
-                      caption = f"📦 {file_name}\nپارت {i} از {total_chunks}" if total_chunks > 1 else f"📦 {file_name}"
-                      if upload_to_bale(chunk, caption):
-                          success_count += 1
-                      if chunk != file_path and os.path.exists(chunk):
-                          os.remove(chunk)
-                  if success_count == total_chunks:
-                      bale_status = f"✅ موفق ({total_chunks} پارت)"
-                  else:
-                      bale_status = f"⚠️ ناقص ({success_count} از {total_chunks} پارت)"
+              # 1. FTP Upload
+              if 'FTP' in DESTINATIONS:
+                  try:
+                      ftp = ftplib.FTP(os.environ['FTP_HOST'])
+                      ftp.login(os.environ['FTP_USER'], os.environ['FTP_PASS'])
+                      ftp.set_pasv(True)
+                      if os.environ['FTP_DIR']:
+                          try: ftp.cwd(os.environ['FTP_DIR'])
+                          except: ftp.mkd(os.environ['FTP_DIR']); ftp.cwd(os.environ['FTP_DIR'])
+                      with open(file_path, 'rb') as f:
+                          ftp.storbinary(f"STOR {file_name}", f)
+                      ftp.quit()
+                      # ساخت لینک فرضی بر اساس دامنه (باید آدرس سایت خود را جایگزین کنید)
+                      report_text += f"🌐 **هاست:** ✅ موفق\n🔗 لینک: `https://yourdomain.com/{os.environ['FTP_DIR']}/{file_name}`\n\n"
+                  except Exception as e:
+                      report_text += f"🌐 **هاست:** ❌ خطا\n\n"
               else:
-                  bale_status = "❌ تنظیم نشده"
+                  report_text += "🌐 **هاست:** ⏭️ نادیده گرفته شد\n\n"
 
-              with open("report_info.txt", "w") as ri:
-                  ri.write(f"🌐 هاست سایت: {ftp_status}\n🤗 هاگینگ‌فیس: {hf_status}\n🟢 پیام‌رسان بله: {bale_status}")
+              # 2. Hugging Face Upload
+              if 'HF' in DESTINATIONS:
+                  try:
+                      hf_api = HfApi()
+                      hf_api.upload_file(path_or_fileobj=file_path, path_in_repo=file_name, repo_id=os.environ['HF_REPO_ID'], repo_type=os.environ['HF_REPO_TYPE'], token=os.environ['HF_TOKEN'])
+                      hf_link = f"https://huggingface.co/{os.environ['HF_REPO_ID']}/resolve/main/{file_name}"
+                      report_text += f"🤗 **هاگینگ‌فیس:** ✅ موفق\n🔗 لینک: {hf_link}\n\n"
+                  except Exception as e:
+                      report_text += f"🤗 **هاگینگ‌فیس:** ❌ خطا\n\n"
+              else:
+                  report_text += "🤗 **هاگینگ‌فیس:** ⏭️ نادیده گرفته شد\n\n"
+
+              # Save info for GitHub Release step
+              with open("file_info.txt", "w") as fi:
+                  fi.write(file_path if 'GH' in DESTINATIONS else "SKIP")
+
+              with open("report_info.txt", "w", encoding="utf-8") as ri:
+                  ri.write(report_text)
 
               await app.stop()
-              
-          if __name__ == '__main__':
-              asyncio.run(main())
-          EOF
           
+          if __name__ == '__main__':
+              asyncio.get_event_loop().run_until_complete(main())
+          EOF
           python3 transfer.py
 
-      - name: Upload to GitHub Release (Robust Check & Upload)
+      - name: Upload to GitHub Release
         id: gh_release
         run: |
           FILE_PATH=$(cat file_info.txt)
-          if [ -f "$FILE_PATH" ]; then
-            if ! gh release view "${{ env.RELEASE_TAG }}" --repo "${{ env.GH_REPO }}" >/dev/null 2>&1; then
-              gh release create "${{ env.RELEASE_TAG }}" --repo "${{ env.GH_REPO }}" --title "Release ${{ env.RELEASE_TAG }}" --notes "Automated Cloud Storage Assets"
-            fi
+          REPORT_TEXT=$(cat report_info.txt)
+          FILE_NAME=$(basename "$FILE_PATH")
+          
+          if [ "$FILE_PATH" != "SKIP" ]; then
+            gh release create "${{ env.RELEASE_TAG }}" --repo "${{ env.GH_REPO }}" --title "Release ${{ env.RELEASE_TAG }}" --notes "Automated Cloud Storage Assets" || true
             gh release upload "${{ env.RELEASE_TAG }}" "$FILE_PATH" --repo "${{ env.GH_REPO }}" --clobber
-            echo "GH_STATUS=✅ موفق" >> $GITHUB_ENV
+            GH_LINK="https://github.com/${{ env.GH_REPO }}/releases/download/${{ env.RELEASE_TAG }}/$FILE_NAME"
+            REPORT_TEXT="$REPORT_TEXT 🐙 **گیت‌هاب:** ✅ موفق\n🔗 لینک: $GH_LINK\n\n"
           else
-            echo "GH_STATUS=❌ خطا در یافتن فایل دانلود شده" >> $GITHUB_ENV
+            REPORT_TEXT="$REPORT_TEXT 🐙 **گیت‌هاب:** ⏭️ نادیده گرفته شد\n\n"
           fi
+          echo -e "$REPORT_TEXT" > final_report.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Send Final Telegram Report
         run: |
-          FILE_PATH=$(cat file_info.txt)
-          FILE_NAME=$(basename "$FILE_PATH")
-          OTHER_REPORTS=$(cat report_info.txt)
-          
-          REPORT_TEXT="🏁 فرآیند انتقال به تمام مقاصد انجام شد!
-
-          📦 نام فایل: $FILE_NAME
-          $OTHER_REPORTS
-          🐙 گیت‌هاب: ${{ env.GH_STATUS }}"
-          
+          FINAL_MSG=$(cat final_report.txt)
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage" \
-            -d "chat_id=${{ env.CHAT_ID }}" \
-            -d "text=$REPORT_TEXT"
+            -d "chat_id=${{ github.event.inputs.chat_id }}" \
+            -d "text=$FINAL_MSG" \
+            -d "parse_mode=Markdown"
